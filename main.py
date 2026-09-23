@@ -10,20 +10,16 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.filters import Command
 
 BOT_TOKEN = "8962785716:AAH9h4b5A65hPGS3Qbsd0TXOU90rLIj4kzE"
-ADMIN_ID = 7939255638  # Твой Telegram ID
+ADMIN_ID = 7939255638
 
-# Список каналов для обязательной подписки
 REQUIRED_CHANNELS = ["@craxkspot", "@noksyaa"]
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
-
-# Хранилище активных игр для каждого чата
 active_games = {}
 
-# Заглушка веб-сервера для Render (убирает предупреждения о портах)
 async def handle_ping(request):
     return web.Response(text="OK")
 
@@ -36,10 +32,9 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-# Функция проверки подписки на все каналы
 async def check_subscription(user_id: int) -> bool:
     if user_id == ADMIN_ID:
-        return True  # Админу подписка не нужна
+        return True
     
     for channel in REQUIRED_CHANNELS:
         try:
@@ -50,7 +45,6 @@ async def check_subscription(user_id: int) -> bool:
             return False
     return True
 
-# Сообщение-требование подписки
 async def send_sub_request(message: Message):
     await message.reply(
         "❌ <b>Чтобы пользоваться ботом, необходимо подписаться на наши каналы!</b>\n\n"
@@ -98,7 +92,6 @@ def get_commands_keyboard():
         ]
     )
 
-# Команда /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     if message.chat.type in ["group", "supergroup"]:
@@ -111,7 +104,6 @@ async def cmd_start(message: Message):
         parse_mode="HTML"
     )
 
-# Кнопка "Команды"
 @dp.callback_query(F.data == "show_commands")
 async def process_show_commands(callback: CallbackQuery):
     commands_text = (
@@ -130,7 +122,6 @@ async def process_show_commands(callback: CallbackQuery):
     await callback.message.answer(commands_text, parse_mode="HTML")
     await callback.answer()
 
-# Просмотр баланса
 @dp.message(F.text.lower().in_({"баланс", "б", "/balance"}))
 async def cmd_balance(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -138,10 +129,11 @@ async def cmd_balance(message: Message):
         return
 
     balance, _ = await get_user(message.from_user.id)
-    user_name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
-    await message.reply(f"👤 <b>{user_name}</b>, твой баланс: <b>{balance}</b> ноксябаксов.", parse_mode="HTML")
+    name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
+    mention = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
 
-# Ежедневный бонус
+    await message.reply(f"👤 {mention}, твой баланс: <b>{balance}</b> ноксябаксов.", parse_mode="HTML")
+
 @dp.message(F.text.lower().in_({"бонус", "/bonus"}))
 async def cmd_bonus(message: Message):
     user_id = message.from_user.id
@@ -167,7 +159,6 @@ async def cmd_bonus(message: Message):
         await update_bonus_time(user_id, current_time)
         await message.reply("🎁 Ты получил ежедневный бонус: <b>+5000</b> ноксябаксов!", parse_mode="HTML")
 
-# Читы (для админа)
 @dp.message(F.text.lower().startswith("читы "))
 async def cmd_admin_cheat(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -182,7 +173,6 @@ async def cmd_admin_cheat(message: Message):
         await update_balance(user_id, new_balance)
         await message.reply(f"👑 <b>Админ-выдача:</b> Выдано <b>+{amount}</b> ноксябаксов!", parse_mode="HTML")
 
-# Перевод денег
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
 async def process_transfer(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -221,10 +211,11 @@ async def process_transfer(message: Message):
     await update_balance(sender_id, sender_balance - amount)
     await update_balance(recipient_id, recipient_balance + amount)
 
-    recipient_name = message.reply_to_message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
-    await message.reply(f"💸 Ты успешно перевел <b>{amount}</b> ноксябаксов пользователю <b>{recipient_name}</b>!", parse_mode="HTML")
+    rec_name = message.reply_to_message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
+    rec_mention = f'<a href="tg://user?id={recipient_id}">{rec_name}</a>'
 
-# Запуск рулетки ("го")
+    await message.reply(f"💸 Ты успешно перевел <b>{amount}</b> ноксябаксов пользователю {rec_mention}!", parse_mode="HTML")
+
 @dp.message(F.text.lower() == "го")
 async def cmd_spin_go(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -253,7 +244,6 @@ async def cmd_spin_go(message: Message):
 
     await asyncio.sleep(3)
 
-    # Удаляем гифку перед выводом результата
     try:
         await msg.delete()
     except Exception:
@@ -271,21 +261,19 @@ async def cmd_spin_go(message: Message):
 
     for b in bets:
         user_id = b["user_id"]
-        user_name = b["user_name"].replace("<", "&lt;").replace(">", "&gt;")
+        user_name = b["user_name"]
+        
+        # Кликабельная ссылка-тег с ИМЕНЕМ пользователя
+        user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+        
         bet = b["bet"]
         target = b["target"]
-
-        # Кликабельное упоминание (тег)
-        user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
 
         multiplier = 0
         is_number_bet = target.isdigit() and 0 <= int(target) <= 36
 
-        # Проверка одиночного числа
         if is_number_bet and int(target) == number:
             multiplier = 36
-        
-        # Проверка диапазонов (например "1-12", "5-20")
         elif "-" in target:
             try:
                 start_str, end_str = target.split("-")
@@ -295,8 +283,6 @@ async def cmd_spin_go(message: Message):
                     multiplier = 36 / total_numbers
             except ValueError:
                 pass
-
-        # Проверка стандартных исходов
         elif number != 0:
             if target == "к" and number in RED_NUMBERS:
                 multiplier = 2
@@ -326,10 +312,8 @@ async def cmd_spin_go(message: Message):
 
         await update_balance(user_id, new_balance)
 
-    # Отправка результатов в формате HTML
     await message.answer(results_text, parse_mode="HTML")
 
-# Прием ставок
 @dp.message()
 async def process_roulette_bet(message: Message):
     text = message.text.strip().lower().split()
@@ -345,7 +329,10 @@ async def process_roulette_bet(message: Message):
     target = text[1]
     user_id = message.from_user.id
     chat_id = message.chat.id
+
+    # Отображаем именно Name пользователя
     user_name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
+    user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
 
     balance, _ = await get_user(user_id)
 
@@ -360,7 +347,6 @@ async def process_roulette_bet(message: Message):
     valid_targets = {"к", "ч", "чет", "нечет", "1д", "2д", "3д"}
     is_number_bet = target.isdigit() and 0 <= int(target) <= 36
 
-    # Проверка формата диапазона (например, "1-12")
     is_range_bet = False
     if "-" in target:
         parts = target.split("-")
@@ -390,8 +376,6 @@ async def process_roulette_bet(message: Message):
     remaining = max(0, int(10 - passed))
 
     timer_info = f" Запустить колесо можно через <b>{remaining}</b> сек (команда <code>го</code>)." if remaining > 0 else " Напишите <code>го</code> для запуска!"
-
-    user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
 
     await message.reply(
         f"✅ {user_mention}, ставка принята: <b>{bet}</b> ноксябаксов на <b>{target}</b>.\n"
