@@ -5,7 +5,7 @@ import os
 import re
 from aiohttp import web
 
-import aiosqlite
+import asyncpg
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
@@ -20,6 +20,10 @@ dp = Dispatcher()
 
 RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 active_games = {}
+db_pool: asyncpg.Pool = None
+
+# Ссылка на БД берётся из настроек Render (Environment Variable DATABASE_URL)
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 async def handle_ping(request):
     return web.Response(text="OK")
@@ -56,51 +60,59 @@ async def send_sub_request(message: Message):
     )
 
 async def init_db():
-    async with aiosqlite.connect("casino.db") as db:
+    global db_pool
+    if not DATABASE_URL:
+        print("CRITICAL: DATABASE_URL не найдена в окружении!")
+        return
+
+    # Корректировка формата URI для asyncpg
+    db_url = DATABASE_URL
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    db_pool = await asyncpg.create_pool(dsn=db_url)
+
+    async with db_pool.acquire() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 username TEXT,
-                balance INTEGER DEFAULT 2000,
-                last_bonus INTEGER DEFAULT 0
+                balance BIGINT DEFAULT 2000,
+                last_bonus BIGINT DEFAULT 0
             )
         """)
-        await db.commit()
 
 async def get_user(user_id: int, username: str = None):
-    async with aiosqlite.connect("casino.db") as db:
-        cursor = await db.execute("SELECT balance, last_bonus FROM users WHERE user_id = ?", (user_id,))
-        row = await cursor.fetchone()
+    async with db_pool.acquire() as db:
+        row = await db.fetchrow("SELECT balance, last_bonus FROM users WHERE user_id = $1", user_id)
         if row is None:
-            await db.execute("INSERT INTO users (user_id, username, balance, last_bonus) VALUES (?, ?, 2000, 0)", 
-                             (user_id, username.lower() if username else None))
-            await db.commit()
+            uname = username.lower() if username else None
+            await db.execute(
+                "INSERT INTO users (user_id, username, balance, last_bonus) VALUES ($1, $2, 2000, 0)", 
+                user_id, uname
+            )
             return 2000, 0
         
         if username:
-            await db.execute("UPDATE users SET username = ? WHERE user_id = ?", (username.lower(), user_id))
-            await db.commit()
+            await db.execute("UPDATE users SET username = $1 WHERE user_id = $2", username.lower(), user_id)
             
-        return row[0], row[1]
+        return row["balance"], row["last_bonus"]
 
 async def get_user_by_username(username: str):
     username_clean = username.lstrip("@").lower()
-    async with aiosqlite.connect("casino.db") as db:
-        cursor = await db.execute("SELECT user_id, balance FROM users WHERE LOWER(username) = ?", (username_clean,))
-        row = await cursor.fetchone()
+    async with db_pool.acquire() as db:
+        row = await db.fetchrow("SELECT user_id, balance FROM users WHERE LOWER(username) = $1", username_clean)
         if row:
-            return row[0], row[1]
+            return row["user_id"], row["balance"]
         return None, None
 
 async def update_balance(user_id: int, new_balance: int):
-    async with aiosqlite.connect("casino.db") as db:
-        await db.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
-        await db.commit()
+    async with db_pool.acquire() as db:
+        await db.execute("UPDATE users SET balance = $1 WHERE user_id = $2", new_balance, user_id)
 
 async def update_bonus_time(user_id: int, current_time: int):
-    async with aiosqlite.connect("casino.db") as db:
-        await db.execute("UPDATE users SET last_bonus = ? WHERE user_id = ?", (current_time, user_id))
-        await db.commit()
+    async with db_pool.acquire() as db:
+        await db.execute("UPDATE users SET last_bonus = $1 WHERE user_id = $2", current_time, user_id)
 
 def get_commands_keyboard():
     return InlineKeyboardMarkup(
@@ -470,10 +482,6 @@ async def process_roulette_bet(message: Message):
 async def main():
     await init_db()
     await start_web_server()
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
