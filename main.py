@@ -23,7 +23,7 @@ RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36
 # Хранилище активных игр для каждого чата
 active_games = {}
 
-# Заглушка веб-сервера для Render (убирает No open ports detected)
+# Заглушка веб-сервера для Render (убирает предупреждения о портах)
 async def handle_ping(request):
     return web.Response(text="OK")
 
@@ -53,11 +53,11 @@ async def check_subscription(user_id: int) -> bool:
 # Сообщение-требование подписки
 async def send_sub_request(message: Message):
     await message.reply(
-        "❌ **Чтобы пользоваться ботом, необходимо подписаться на наши каналы!**\n\n"
+        "❌ <b>Чтобы пользоваться ботом, необходимо подписаться на наши каналы!</b>\n\n"
         "👉 t.me/craxkspot\n"
         "👉 t.me/noksyaa\n\n"
         "После подписки ты сможешь делать ставки и использовать все команды.",
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 async def init_db():
@@ -106,28 +106,28 @@ async def cmd_start(message: Message):
         
     await get_user(message.from_user.id)
     await message.answer(
-        "🎰 **Добро пожаловать в казино Нокси**",
+        "🎰 <b>Добро пожаловать в казино Нокси</b>",
         reply_markup=get_commands_keyboard(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 # Кнопка "Команды"
 @dp.callback_query(F.data == "show_commands")
 async def process_show_commands(callback: CallbackQuery):
     commands_text = (
-        "📌 **Команды бота (нужна подписка на @craxkspot и @noksyaa):**\n"
-        "• `баланс` или `б` — узнать свой баланс\n"
-        "• `бонус` — забрать ежедневный бонус (5000 ноксябаксов)\n"
-        "• `п <сумма>` или `передать <сумма>` (ответом на сообщение) — перевести деньги\n"
-        "• `го` — запустить рулетку после ставок (доступно через 10 сек)\n\n"
-        "🎰 **Варианты ставок в рулетке:**\n"
-        "• На цвет: `к` (красное), `ч` (черное)\n"
-        "• На четность: `чет`, `нечет`\n"
-        "• На дюжину: `1д`, `2д`, `3д`\n"
-        "• На число: от `0` до `36` (умножение x36)\n"
-        "• На **любой диапазон**: `1-12`, `1-15`, `5-20` и т.д. (коэффициент высчитывается автоматически)"
+        "📌 <b>Команды бота (нужна подписка на @craxkspot и @noksyaa):</b>\n"
+        "• <code>баланс</code> или <code>б</code> — узнать свой баланс\n"
+        "• <code>бонус</code> — забрать ежедневный бонус (5000 ноксябаксов)\n"
+        "• <code>п &lt;сумма&gt;</code> или <code>передать &lt;сумма&gt;</code> (ответом на сообщение) — перевести деньги\n"
+        "• <code>го</code> — запустить рулетку после ставок (доступно через 10 сек)\n\n"
+        "🎰 <b>Варианты ставок в рулетке:</b>\n"
+        "• На цвет: <code>к</code> (красное), <code>ч</code> (черное)\n"
+        "• На четность: <code>чет</code>, <code>нечет</code>\n"
+        "• На дюжину: <code>1д</code>, <code>2д</code>, <code>3д</code>\n"
+        "• На число: от <code>0</code> до <code>36</code> (умножение x36)\n"
+        "• На <b>любой диапазон</b>: <code>1-12</code>, <code>1-15</code>, <code>5-20</code> и т.д. (коэффициент высчитывается автоматически)"
     )
-    await callback.message.answer(commands_text, parse_mode="Markdown")
+    await callback.message.answer(commands_text, parse_mode="HTML")
     await callback.answer()
 
 # Просмотр баланса
@@ -138,8 +138,8 @@ async def cmd_balance(message: Message):
         return
 
     balance, _ = await get_user(message.from_user.id)
-    user_name = message.from_user.first_name
-    await message.reply(f"👤 **{user_name}**, твой баланс: **{balance}** ноксябаксов.", parse_mode="Markdown")
+    user_name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
+    await message.reply(f"👤 <b>{user_name}</b>, твой баланс: <b>{balance}</b> ноксябаксов.", parse_mode="HTML")
 
 # Ежедневный бонус
 @dp.message(F.text.lower().in_({"бонус", "/bonus"}))
@@ -160,12 +160,12 @@ async def cmd_bonus(message: Message):
         remaining = cooldown - passed_time
         hours = remaining // 3600
         minutes = (remaining % 3600) // 60
-        await message.reply(f"⏳ Бонус можно получить через **{hours}ч {minutes}мин**.", parse_mode="Markdown")
+        await message.reply(f"⏳ Бонус можно получить через <b>{hours}ч {minutes}мин</b>.", parse_mode="HTML")
     else:
         new_balance = balance + 5000
         await update_balance(user_id, new_balance)
         await update_bonus_time(user_id, current_time)
-        await message.reply("🎁 Ты получил ежедневный бонус: **+5000** ноксябаксов!", parse_mode="Markdown")
+        await message.reply("🎁 Ты получил ежедневный бонус: <b>+5000</b> ноксябаксов!", parse_mode="HTML")
 
 # Читы (для админа)
 @dp.message(F.text.lower().startswith("читы "))
@@ -180,7 +180,7 @@ async def cmd_admin_cheat(message: Message):
         balance, _ = await get_user(user_id)
         new_balance = balance + amount
         await update_balance(user_id, new_balance)
-        await message.reply(f"👑 **Админ-выдача:** Выдано **+{amount}** ноксябаксов!", parse_mode="Markdown")
+        await message.reply(f"👑 <b>Админ-выдача:</b> Выдано <b>+{amount}</b> ноксябаксов!", parse_mode="HTML")
 
 # Перевод денег
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
@@ -190,12 +190,12 @@ async def process_transfer(message: Message):
         return
 
     if not message.reply_to_message or message.reply_to_message.from_user.is_bot:
-        await message.reply("Ответь этой командой на сообщение человека, которому хочешь перевести деньги!", parse_mode="Markdown")
+        await message.reply("Ответь этой командой на сообщение человека, которому хочешь перевести деньги!", parse_mode="HTML")
         return
 
     text = message.text.strip().split()
     if len(text) != 2 or not text[1].isdigit():
-        await message.reply("Укажи сумму перевода числом! Пример: `п 500`", parse_mode="Markdown")
+        await message.reply("Укажи сумму перевода числом! Пример: <code>п 500</code>", parse_mode="HTML")
         return
 
     amount = int(text[1])
@@ -203,17 +203,17 @@ async def process_transfer(message: Message):
     recipient_id = message.reply_to_message.from_user.id
 
     if sender_id == recipient_id:
-        await message.reply("Нельзя переводить деньги самому себе!", parse_mode="Markdown")
+        await message.reply("Нельзя переводить деньги самому себе!", parse_mode="HTML")
         return
 
     if amount <= 0:
-        await message.reply("Сумма перевода должна быть больше 0!", parse_mode="Markdown")
+        await message.reply("Сумма перевода должна быть больше 0!", parse_mode="HTML")
         return
 
     sender_balance, _ = await get_user(sender_id)
 
     if amount > sender_balance:
-        await message.reply("У тебя недостаточно ноксябаксов для перевода!", parse_mode="Markdown")
+        await message.reply("У тебя недостаточно ноксябаксов для перевода!", parse_mode="HTML")
         return
 
     recipient_balance, _ = await get_user(recipient_id)
@@ -221,8 +221,8 @@ async def process_transfer(message: Message):
     await update_balance(sender_id, sender_balance - amount)
     await update_balance(recipient_id, recipient_balance + amount)
 
-    recipient_name = message.reply_to_message.from_user.first_name
-    await message.reply(f"💸 Ты успешно перевел **{amount}** ноксябаксов пользователю **{recipient_name}**!", parse_mode="Markdown")
+    recipient_name = message.reply_to_message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
+    await message.reply(f"💸 Ты успешно перевел <b>{amount}</b> ноксябаксов пользователю <b>{recipient_name}</b>!", parse_mode="HTML")
 
 # Запуск рулетки ("го")
 @dp.message(F.text.lower() == "го")
@@ -234,7 +234,7 @@ async def cmd_spin_go(message: Message):
     chat_id = message.chat.id
 
     if chat_id not in active_games or not active_games[chat_id]["bets"]:
-        await message.reply("На столе пока нет ставок! Сделайте ставку (например: `1000 к` или `1000 1-12`).", parse_mode="Markdown")
+        await message.reply("На столе пока нет ставок! Сделайте ставку (например: <code>1000 к</code> или <code>1000 1-12</code>).", parse_mode="HTML")
         return
 
     game = active_games[chat_id]
@@ -242,7 +242,7 @@ async def cmd_spin_go(message: Message):
 
     if passed_time < 10:
         remaining = int(10 - passed_time)
-        await message.reply(f"⏳ Подождите еще **{remaining}** сек., прежде чем крутить!", parse_mode="Markdown")
+        await message.reply(f"⏳ Подождите еще <b>{remaining}</b> сек., прежде чем крутить!", parse_mode="HTML")
         return
 
     bets = game["bets"]
@@ -253,7 +253,7 @@ async def cmd_spin_go(message: Message):
 
     await asyncio.sleep(3)
 
-    # Удаляем сообщение с GIF-анимацией
+    # Удаляем гифку перед выводом результата
     try:
         await msg.delete()
     except Exception:
@@ -267,13 +267,16 @@ async def cmd_spin_go(message: Message):
     else:
         color_str = "черное"
 
-    results_text = f"🎯 Выпало: **{number}** ({color_str})\n\n"
+    results_text = f"🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
 
     for b in bets:
         user_id = b["user_id"]
-        user_name = b["user_name"]
+        user_name = b["user_name"].replace("<", "&lt;").replace(">", "&gt;")
         bet = b["bet"]
         target = b["target"]
+
+        # Кликабельное упоминание (тег)
+        user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
 
         multiplier = 0
         is_number_bet = target.isdigit() and 0 <= int(target) <= 36
@@ -316,15 +319,15 @@ async def cmd_spin_go(message: Message):
             win_amount = int(bet * multiplier)
             profit = win_amount - bet
             new_balance = balance + profit
-            results_text += f"🎉 **{user_name}**: Выигрыш **+{profit}** ноксябаксов! (x{round(multiplier, 2)})\n"
+            results_text += f"🎉 {user_mention}: Выигрыш <b>+{profit}</b> ноксябаксов! (x{round(multiplier, 2)})\n"
         else:
             new_balance = balance - bet
-            results_text += f"❌ **{user_name}**: Потеряно **-{bet}** ноксябаксов.\n"
+            results_text += f"❌ {user_mention}: Потеряно <b>-{bet}</b> ноксябаксов.\n"
 
         await update_balance(user_id, new_balance)
 
-    # Отправка результатов с включенным форматированием Markdown
-    await message.answer(results_text, parse_mode="Markdown")
+    # Отправка результатов в формате HTML
+    await message.answer(results_text, parse_mode="HTML")
 
 # Прием ставок
 @dp.message()
@@ -342,16 +345,16 @@ async def process_roulette_bet(message: Message):
     target = text[1]
     user_id = message.from_user.id
     chat_id = message.chat.id
-    user_name = message.from_user.first_name
+    user_name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
 
     balance, _ = await get_user(user_id)
 
     if bet <= 0:
-        await message.reply("Ставка должна быть больше 0!", parse_mode="Markdown")
+        await message.reply("Ставка должна быть больше 0!", parse_mode="HTML")
         return
 
     if bet > balance:
-        await message.reply("У тебя недостаточно ноксябаксов!", parse_mode="Markdown")
+        await message.reply("У тебя недостаточно ноксябаксов!", parse_mode="HTML")
         return
 
     valid_targets = {"к", "ч", "чет", "нечет", "1д", "2д", "3д"}
@@ -386,12 +389,14 @@ async def process_roulette_bet(message: Message):
     passed = current_time - active_games[chat_id]["start_time"]
     remaining = max(0, int(10 - passed))
 
-    timer_info = f" Запустить колесо можно через **{remaining}** сек (команда `го`)." if remaining > 0 else " Напишите `го` для запуска!"
+    timer_info = f" Запустить колесо можно через <b>{remaining}</b> сек (команда <code>го</code>)." if remaining > 0 else " Напишите <code>го</code> для запуска!"
+
+    user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
 
     await message.reply(
-        f"✅ **{user_name}**, ставка принята: **{bet}** ноксябаксов на **{target}**.\n"
+        f"✅ {user_mention}, ставка принята: <b>{bet}</b> ноксябаксов на <b>{target}</b>.\n"
         f"{timer_info}",
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 async def main():
