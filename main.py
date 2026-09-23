@@ -2,9 +2,7 @@ import asyncio
 import random
 import time
 import os
-
-# Автоматическая установка библиотек
-os.system("pip install aiogram aiosqlite")
+from aiohttp import web
 
 import aiosqlite
 from aiogram import Bot, Dispatcher, F
@@ -24,6 +22,19 @@ RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36
 
 # Хранилище активных игр для каждого чата
 active_games = {}
+
+# Заглушка веб-сервера для Render (убирает No open ports detected)
+async def handle_ping(request):
+    return web.Response(text="OK")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 # Функция проверки подписки на все каналы
 async def check_subscription(user_id: int) -> bool:
@@ -128,7 +139,7 @@ async def cmd_balance(message: Message):
 
     balance, _ = await get_user(message.from_user.id)
     user_name = message.from_user.first_name
-    await message.reply(f"👤 **{user_name}**, твой баланс: **{balance}** ноксябаксов.")
+    await message.reply(f"👤 **{user_name}**, твой баланс: **{balance}** ноксябаксов.", parse_mode="Markdown")
 
 # Ежедневный бонус
 @dp.message(F.text.lower().in_({"бонус", "/bonus"}))
@@ -149,12 +160,12 @@ async def cmd_bonus(message: Message):
         remaining = cooldown - passed_time
         hours = remaining // 3600
         minutes = (remaining % 3600) // 60
-        await message.reply(f"⏳ Бонус можно получить через **{hours}ч {minutes}мин**.")
+        await message.reply(f"⏳ Бонус можно получить через **{hours}ч {minutes}мин**.", parse_mode="Markdown")
     else:
         new_balance = balance + 5000
         await update_balance(user_id, new_balance)
         await update_bonus_time(user_id, current_time)
-        await message.reply("🎁 Ты получил ежедневный бонус: **+5000** ноксябаксов!")
+        await message.reply("🎁 Ты получил ежедневный бонус: **+5000** ноксябаксов!", parse_mode="Markdown")
 
 # Читы (для админа)
 @dp.message(F.text.lower().startswith("читы "))
@@ -169,7 +180,7 @@ async def cmd_admin_cheat(message: Message):
         balance, _ = await get_user(user_id)
         new_balance = balance + amount
         await update_balance(user_id, new_balance)
-        await message.reply(f"👑 **Админ-выдача:** Выдано **+{amount}** ноксябаксов!")
+        await message.reply(f"👑 **Админ-выдача:** Выдано **+{amount}** ноксябаксов!", parse_mode="Markdown")
 
 # Перевод денег
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
@@ -179,7 +190,7 @@ async def process_transfer(message: Message):
         return
 
     if not message.reply_to_message or message.reply_to_message.from_user.is_bot:
-        await message.reply("Ответь этой командой на сообщение человека, которому хочешь перевести деньги!")
+        await message.reply("Ответь этой командой на сообщение человека, которому хочешь перевести деньги!", parse_mode="Markdown")
         return
 
     text = message.text.strip().split()
@@ -192,17 +203,17 @@ async def process_transfer(message: Message):
     recipient_id = message.reply_to_message.from_user.id
 
     if sender_id == recipient_id:
-        await message.reply("Нельзя переводить деньги самому себе!")
+        await message.reply("Нельзя переводить деньги самому себе!", parse_mode="Markdown")
         return
 
     if amount <= 0:
-        await message.reply("Сумма перевода должна быть больше 0!")
+        await message.reply("Сумма перевода должна быть больше 0!", parse_mode="Markdown")
         return
 
     sender_balance, _ = await get_user(sender_id)
 
     if amount > sender_balance:
-        await message.reply("У тебя недостаточно ноксябаксов для перевода!")
+        await message.reply("У тебя недостаточно ноксябаксов для перевода!", parse_mode="Markdown")
         return
 
     recipient_balance, _ = await get_user(recipient_id)
@@ -211,7 +222,7 @@ async def process_transfer(message: Message):
     await update_balance(recipient_id, recipient_balance + amount)
 
     recipient_name = message.reply_to_message.from_user.first_name
-    await message.reply(f"💸 Ты успешно перевел **{amount}** ноксябаксов пользователю **{recipient_name}**!")
+    await message.reply(f"💸 Ты успешно перевел **{amount}** ноксябаксов пользователю **{recipient_name}**!", parse_mode="Markdown")
 
 # Запуск рулетки ("го")
 @dp.message(F.text.lower() == "го")
@@ -231,7 +242,7 @@ async def cmd_spin_go(message: Message):
 
     if passed_time < 10:
         remaining = int(10 - passed_time)
-        await message.reply(f"⏳ Подождите еще **{remaining}** сек., прежде чем крутить!")
+        await message.reply(f"⏳ Подождите еще **{remaining}** сек., прежде чем крутить!", parse_mode="Markdown")
         return
 
     bets = game["bets"]
@@ -241,6 +252,12 @@ async def cmd_spin_go(message: Message):
     msg = await message.answer_animation(animation=gif_url, caption="🎰 Колесо крутится...")
 
     await asyncio.sleep(3)
+
+    # Удаляем сообщение с GIF-анимацией
+    try:
+        await msg.delete()
+    except Exception:
+        pass
 
     number = random.randint(0, 36)
     if number == 0:
@@ -306,7 +323,8 @@ async def cmd_spin_go(message: Message):
 
         await update_balance(user_id, new_balance)
 
-    await msg.reply(results_text)
+    # Отправка результатов с включенным форматированием Markdown
+    await message.answer(results_text, parse_mode="Markdown")
 
 # Прием ставок
 @dp.message()
@@ -329,11 +347,11 @@ async def process_roulette_bet(message: Message):
     balance, _ = await get_user(user_id)
 
     if bet <= 0:
-        await message.reply("Ставка должна быть больше 0!")
+        await message.reply("Ставка должна быть больше 0!", parse_mode="Markdown")
         return
 
     if bet > balance:
-        await message.reply("У тебя недостаточно ноксябаксов!")
+        await message.reply("У тебя недостаточно ноксябаксов!", parse_mode="Markdown")
         return
 
     valid_targets = {"к", "ч", "чет", "нечет", "1д", "2д", "3д"}
@@ -372,11 +390,13 @@ async def process_roulette_bet(message: Message):
 
     await message.reply(
         f"✅ **{user_name}**, ставка принята: **{bet}** ноксябаксов на **{target}**.\n"
-        f"{timer_info}"
+        f"{timer_info}",
+        parse_mode="Markdown"
     )
 
 async def main():
     await init_db()
+    await start_web_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
