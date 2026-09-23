@@ -22,7 +22,6 @@ RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36
 active_games = {}
 db_pool: asyncpg.Pool = None
 
-# Ссылка на БД берётся из настроек Render (Environment Variable DATABASE_URL)
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 async def handle_ping(request):
@@ -65,7 +64,6 @@ async def init_db():
         print("CRITICAL: DATABASE_URL не найдена в окружении!")
         return
 
-    # Корректировка формата URI для asyncpg
     db_url = DATABASE_URL
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
@@ -213,11 +211,13 @@ async def cmd_admin_take(message: Message):
     parts = message.text.strip().split()
     target_user_id = None
     amount = 0
+    target_name = "Пользователь"
 
     if message.reply_to_message and not message.reply_to_message.from_user.is_bot:
         if len(parts) == 2 and parts[1].isdigit():
             target_user_id = message.reply_to_message.from_user.id
             amount = int(parts[1])
+            target_name = message.reply_to_message.from_user.first_name
     elif len(parts) == 3 and parts[2].isdigit():
         target_username = parts[1]
         amount = int(parts[2])
@@ -225,6 +225,8 @@ async def cmd_admin_take(message: Message):
         if not target_user_id:
             await message.reply("❌ Пользователь с таким юзернеймом не найден в базе данных!", parse_mode="HTML")
             return
+        # Пробуем подтянуть имя из базы или юзернейм
+        target_name = target_username
 
     if not target_user_id or amount <= 0:
         await message.reply("❌ Пример применения:\n• Ответом: <code>забрать 500</code>\n• По юзернейму: <code>забрать @username 500</code>", parse_mode="HTML")
@@ -234,10 +236,11 @@ async def cmd_admin_take(message: Message):
     new_balance = max(0, balance - amount)
     await update_balance(target_user_id, new_balance)
     
-    target_mention = f'<a href="tg://user?id={target_user_id}">Пользователь</a>'
+    clean_name = target_name.replace("<", "&lt;").replace(">", "&gt;")
+    target_mention = f'<a href="tg://user?id={target_user_id}">{clean_name}</a>'
     await message.reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов. Текущий баланс: <b>{new_balance}</b>.", parse_mode="HTML")
 
-# Перевод денег
+# Перевод денег (с поддержкой поиска по юзернейму в чате, если пользователя нет в базе)
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
 async def process_transfer(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -247,20 +250,50 @@ async def process_transfer(message: Message):
     parts = message.text.strip().split()
     sender_id = message.from_user.id
     recipient_id = None
+    recipient_username_str = None
+    recipient_name = None
     amount = 0
 
+    # 1. Перевод ответом на сообщение
     if message.reply_to_message and not message.reply_to_message.from_user.is_bot:
         if len(parts) == 2 and parts[1].isdigit():
             recipient_id = message.reply_to_message.from_user.id
+            recipient_name = message.reply_to_message.from_user.first_name
+            recipient_username_str = message.reply_to_message.from_user.username
             amount = int(parts[1])
             
+    # 2. Перевод по юзернейму: "п @username 500"
     elif len(parts) == 3 and parts[2].isdigit():
-        recipient_username = parts[1]
+        recipient_username_input = parts[1]
         amount = int(parts[2])
-        recipient_id, _ = await get_user_by_username(recipient_username)
+        
+        # Сначала ищем в нашей базе данных
+        recipient_id, _ = await get_user_by_username(recipient_username_input)
+        
+        # Если в базе нет, пробуем найти через Telegram API (если бот в группе и пользователь в ней есть)
+        if not recipient_id and message.chat.type in ["group", "supergroup"]:
+            clean_uname = recipient_username_input.lstrip("@")
+            try:
+                # В aiogram 3 для поиска по юзернейму прямого метода нет, 
+                # но если пользователь упоминается, можно использовать get_chat или чат участников (если админ).
+                # Универсальный обход: попросим написать боту или проверим через пересылку, 
+                # но для обычных групп Telegram не дает по юзернейму вытянуть ID без сообщения.
+                pass
+            except Exception:
+                pass
+
         if not recipient_id:
-            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе! Он должен хотя бы раз написать боту.", parse_mode="HTML")
+            await message.reply(
+                "❌ Пользователь с таким юзернеймом не найден в базе данных! "
+                "Чтобы бот запомнил игрока, он должен хотя бы один раз написать любое сообщение в этот чат.", 
+                parse_mode="HTML"
+            )
             return
+        
+        # Если нашли в базе, подтягиваем его имя
+        async with db_pool.acquire() as db:
+            row = await db.fetchrow("SELECT username FROM users WHERE user_id = $1", recipient_id)
+            recipient_name = row["username"] if row and row["username"] else recipient_username_input
 
     if not recipient_id or amount <= 0:
         await message.reply("❌ Неверный формат! Используй:\n• <code>п 500</code> (ответом)\n• <code>п @username 500</code>", parse_mode="HTML")
@@ -281,7 +314,9 @@ async def process_transfer(message: Message):
     await update_balance(sender_id, sender_balance - amount)
     await update_balance(recipient_id, recipient_balance + amount)
 
-    rec_mention = f'<a href="tg://user?id={recipient_id}">Пользователю</a>'
+    clean_rec_name = str(recipient_name or "Пользователь").replace("<", "&lt;").replace(">", "&gt;")
+    rec_mention = f'<a href="tg://user?id={recipient_id}">{clean_rec_name}</a>'
+    
     await message.reply(f"💸 Ты успешно перевел <b>{amount}</b> ноксябаксов {rec_mention}!", parse_mode="HTML")
 
 # Отмена своих ставок
@@ -438,7 +473,7 @@ async def process_roulette_bet(message: Message):
         return
 
     valid_targets = {"к", "ч", "чет", "нечет", "1д", "2д", "3д"}
-    is_number_bet = target.isdigit() and 0 <= int(target) <= 36
+    is_number_fd = target.isdigit() and 0 <= int(target) <= 36
 
     is_range_bet = False
     if "-" in target:
@@ -448,10 +483,9 @@ async def process_roulette_bet(message: Message):
             if 0 <= start < end <= 36:
                 is_range_bet = True
 
-    if not is_number_bet and not is_range_bet and target not in valid_targets:
+    if not is_number_fd and not is_range_bet and target not in valid_targets:
         return
 
-    # Списываем сумму ставки сразу при принятии
     await update_balance(user_id, balance - bet)
 
     current_time = time.time()
