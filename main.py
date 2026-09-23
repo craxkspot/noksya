@@ -326,7 +326,7 @@ async def cmd_cancel_bets(message: Message):
 
     await message.reply(f"🚫 {mention}, твои ставки отменены! На баланс возвращено <b>+{refund_amount}</b> ноксябаксов.", parse_mode="HTML")
 
-# Запуск рулетки ("го") с детальным выводом результатов
+# Запуск рулетки ("го") с корректным расчетом выигрышей/проигрышей
 @dp.message(F.text.lower() == "го")
 async def cmd_spin_go(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -387,7 +387,7 @@ async def cmd_spin_go(message: Message):
         
         results_text += f"👤 <b>{user_mention}</b>:\n"
 
-        net_change = 0 # Итоговое изменение баланса за раунд (чистая прибыль минус проигрыши)
+        total_payout_to_add = 0 # Сколько всего денег (выигрышей с телом) нужно вернуть на баланс
 
         for b in u_data["bets"]:
             bet = b["bet"]
@@ -423,21 +423,27 @@ async def cmd_spin_go(message: Message):
                     multiplier = 3
 
             if multiplier > 0:
-                total_payout = int(bet * multiplier)
-                profit = total_payout - bet
-                net_change += profit
+                payout = int(bet * multiplier)
+                profit = payout - bet
+                total_payout_to_add += payout
                 results_text += f"  ▫️ Ставка <code>{bet}</code> на <code>{target}</code> — ✅ Выигрыш <b>+{profit}</b> (x{round(multiplier, 2)})\n"
             else:
-                net_change -= bet
                 results_text += f"  ▫️ Ставка <code>{bet}</code> на <code>{target}</code> — ❌ Проигрыш <b>-{bet}</b>\n"
 
-        # Обновляем баланс в базе (ставки уже были списаны при создании, поэтому прибавляем net_change)
+        # Сумма всех поставленных денег пользователя в этом раунде
+        total_user_bets = sum(b["bet"] for b in u_data["bets"])
+        
+        # Чистый итог раунда (выиграно минус поставлено)
+        net_round_change = total_payout_to_add - total_user_bets
+
+        # Обновляем баланс в базе (так как деньги уже списались в момент ставки, 
+        # нам нужно просто прибавить общую сумму выигрышей total_payout_to_add)
         balance, _ = await get_user(user_id)
-        final_user_balance = max(0, balance + net_change)
+        final_user_balance = max(0, balance + total_payout_to_add)
         await update_balance(user_id, final_user_balance)
         
-        sign_str = "+" if net_change >  0 else ""
-        results_text += f"  💰 Итог раунда: <b>{sign_str}{net_change}</b> ноксябаксов\n\n"
+        sign_str = "+" if net_round_change > 0 else ("" if net_round_change == 0 else "")
+        results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> ноксябаксов\n\n"
 
     await message.answer(results_text, parse_mode="HTML")
 
