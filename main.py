@@ -23,6 +23,15 @@ db_pool: asyncpg.Pool = None
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# Каталог персонажей (цены и описания)
+PROSTITUTES_CATALOG = [
+    {"id": 1, "name": "Мила (Улица)", "price": 3000, "tier": 1},
+    {"id": 2, "name": "Кристина (Клуб)", "price": 15000, "tier": 2},
+    {"id": 3, "name": "Элитная модель Сабина", "price": 75000, "tier": 3},
+    {"id": 4, "name": "Премиум-дива Изабелла", "price": 250000, "tier": 4},
+    {"id": 5, "name": "VIP-легенда казино (Абсолют)", "price": 500000, "tier": 5},
+]
+
 async def handle_ping(request):
     return web.Response(text="OK")
 
@@ -114,7 +123,8 @@ async def update_bonus_time(user_id: int, current_time: int):
 def get_commands_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📜 Команды", callback_data="show_commands")]
+            [InlineKeyboardButton(text="📜 Команды", callback_data="show_commands")],
+            [InlineKeyboardButton(text="💃 Эскорт / Каталог", callback_data="show_prostitutes")]
         ]
     )
 
@@ -138,7 +148,8 @@ async def process_show_commands(callback: CallbackQuery):
         "• <code>бонус</code> — забрать ежедневный бонус (5000 ноксябаксов)\n"
         "• <code>п @username &lt;сумма&gt;</code> или ответом — перевести деньги\n"
         "• <code>отмена</code> — отменить свои несыгравшие ставки\n"
-        "• <code>го</code> — запустить рулетку после ставок (доступно через 10 сек)\n\n"
+        "• <code>го</code> — запустить рулетку после ставок (доступно через 10 сек)\n"
+        "• <code>шлюхи</code> — открыть каталог компаньонок\n\n"
         "🎰 <b>Варианты ставок в рулетке (можно писать по несколько штук в одном сообщении с новой строки):</b>\n"
         "• На цвет: <code>к</code> (красное), <code>ч</code> (черное)\n"
         "• На четность: <code>чет</code>, <code>нечет</code>\n"
@@ -148,6 +159,126 @@ async def process_show_commands(callback: CallbackQuery):
     )
     await callback.message.answer(commands_text, parse_mode="HTML")
     await callback.answer()
+
+# Показ каталога компаньонок через инлайн-кнопки
+@dp.message(F.text.lower().in_({"шлюхи", "шлюха", "эскорт", "каталог"}))
+async def cmd_prostitutes_catalog(message: Message):
+    if not await check_subscription(message.from_user.id):
+        await send_sub_request(message)
+        return
+
+    keyboard_buttons = []
+    for p in PROSTITUTES_CATALOG:
+        keyboard_buttons.append([
+            InlineKeyboardButton(
+                text=f"{p['name']} — {p['price']} 💰", 
+                callback_data=f"buy_prostitute_{p['id']}"
+            )
+        ])
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    await message.reply(
+        "💃 <b>Каталог компаньонок ночного клуба:</b>\n"
+        "Выбери спутницу на вечер. Чем выше статус и цена, тем ярче и длиннее пройдет ваша встреча!",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data.startswith("show_prostitutes"))
+async def process_show_prostitutes_callback(callback: CallbackQuery):
+    keyboard_buttons = []
+    for p in PROSTITUTES_CATALOG:
+        keyboard_buttons.append([
+            InlineKeyboardButton(
+                text=f"{p['name']} — {p['price']} 💰", 
+                callback_data=f"buy_prostitute_{p['id']}"
+            )
+        ])
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    await callback.message.edit_text(
+        "💃 <b>Каталог компаньонок ночного клуба:</b>\n"
+        "Выбери спутницу на вечер. Чем выше статус и цена, тем ярче и длиннее пройдет ваша встреча!",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+# Обработка покупки компаньонки с развернутым описанием действий взависимости от цены/тир
+@dp.callback_query(F.data.startswith("buy_prostitute_"))
+async def process_buy_prostitute(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if not await check_subscription(user_id):
+        await callback.answer("Нужна подписка на каналы!", show_alert=True)
+        return
+
+    try:
+        p_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        return
+
+    prostitute = next((p for p in PROSTITUTES_CATALOG if p["id"] == p_id), None)
+    if not prostitute:
+        await callback.answer("Персонаж не найден!", show_alert=True)
+        return
+
+    balance, _ = await get_user(user_id, callback.from_user.username)
+    price = prostitute["price"]
+
+    if balance < price:
+        await callback.answer(f"❌ Недостаточно средств! Нужно {price} ноксябаксов.", show_alert=True)
+        return
+
+    # Списываем баланс
+    new_balance = balance - price
+    await update_balance(user_id, new_balance)
+
+    tier = prostitute["tier"]
+    name = prostitute["name"]
+
+    # Генерация развернутого текста действий в зависимости от стоимости/ранга
+    if tier == 1:
+        action_text = (
+            f"🤝 Ты забирает с улицы дешевую компаньонку <b>{name}</b> за <b>{price}</b> ноксябаксов.\n\n"
+            f"Вы садитесь в прокуренный старый седан, едете на окраину города в заброшенный мотель с тусклым неоновым светом. "
+            f"Быстро расплачиваетесь, проводите вместе полчаса в уставшей комнате под шум проезжающих мимо фур, после чего она молча собирает вещи и уходит в темноту."
+        )
+    elif tier == 2:
+        action_text = (
+            f"🍸 Ты оформляете вечер с <b>{name}</b> из местного клуба за <b>{price}</b> ноксябаксов.\n\n"
+            f"Сначала вы сидите в полумраке VIP-зоны за коктейлями, обсуждая пустяки под тихий лаунж-бит. Затем вы вызываете загородное такси "
+            f"и уединяетесь в уютных апартаментах на пару часов. Проводится легкая непринужденная беседа, переходящая в страстную ночь, а под утро она оставляет на тумбе легкий парфюмерный шлейф."
+        )
+    elif tier == 3:
+        action_text = (
+            f"🔥 Ты оформляешь элитный заказ на топ-модель <b>{name}</b> стоимостью <b>{price}</b> ноксябаксов[cite: 4].\n\n"
+            f"К входу казино подъезжает черный лимузин с личным водителем. Вы отправляетесь в лучший панорамный ресторан в центре города на верхнем этаже небоскреба. "
+            f"Дорогущее шампанское, изысканные деликатесы, вспышки камер папарацци на выходе. После ужина вы поднимаетесь в президентский люкс пятизвездочного отеля с видом на ночной мегаполис. "
+            f"Элегантность, безупречный стиль, дорогие наряды и незабываемая приватная ночь до самого рассвета, полная роскоши и взаимного притяжения."
+        )
+    elif tier == 4:
+        action_text = (
+            f"👑 Ты выкупаешь эксклюзивное время премиум-дивы <b>{name}</b> за <b>{price}</b> ноксябаксов[cite: 4].\n\n"
+            f"Организуется закрытый вылет на частном вертолете на побережье, арендуется целая вилла с бассейном под открытым небом и личным шеф-поваром. "
+            f"Вокруг царит атмосфера высшего света: экзотические напитки, дорогая музыка, идеальная эстетика кадра. Происходит глубокое погружение в мир элитарного отдыха и страсти, "
+            f"где каждый жест наполнен статусом, а уединение длится двое суток в абсолютной изоляции от внешнего мира."
+        )
+    else:
+        action_text = (
+            f"💎 ТЫ АКТИВИРУЕШЬ МАКСИМАЛЬНЫЙ VIP-УРОВЕНЬ! Легендарная <b>{name}</b> приобретена за <b>{price}</b> ноксябаксов[cite: 4].\n\n"
+            f"Это событие меняет всё. Для вас закрывают целый элитный островной курорт с собственным яхт-клубом. Вас обслуживает целый штаб персонального персонала. "
+            f"Эффектный антураж, кинематографичные сцены из фильмов про богатеев, абсолютная власть над атмосферой. Незабываемый уик-энд, полный умопомрачительных приключений, "
+            f"роскошных ракурсов, глубоких эмоций и безудержной страсти на высшем уровне, который останется в памяти на всю жизнь."
+        )
+
+    user_mention = f'<a href="tg://user?id={user_id}">{callback.from_user.first_name}</a>'
+    
+    await callback.message.edit_text(
+        f"✅ {user_mention}, сделка успешно подтверждена!\n\n"
+        f"{action_text}\n\n"
+        f"💰 Остаток на балансе: <b>{new_balance}</b> ноксябаксов.",
+        parse_mode="HTML"
+    )
+    await callback.answer("Успешно!")
 
 @dp.message(F.text.lower().in_({"баланс", "б", "/balance"}))
 async def cmd_balance(message: Message):
@@ -370,7 +501,6 @@ async def cmd_spin_go(message: Message):
 
     results_text = f"🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
 
-    # Группируем ставки по пользователям
     user_bets_map = {}
     for b in bets:
         uid = b["user_id"]
@@ -387,7 +517,7 @@ async def cmd_spin_go(message: Message):
         
         results_text += f"👤 <b>{user_mention}</b>:\n"
 
-        total_payout_to_add = 0 # Сколько всего денег (выигрышей с телом) нужно вернуть на баланс
+        total_payout_to_add = 0
 
         for b in u_data["bets"]:
             bet = b["bet"]
@@ -430,14 +560,9 @@ async def cmd_spin_go(message: Message):
             else:
                 results_text += f"  ▫️ Ставка <code>{bet}</code> на <code>{target}</code> — ❌ Проигрыш <b>-{bet}</b>\n"
 
-        # Сумма всех поставленных денег пользователя в этом раунде
         total_user_bets = sum(b["bet"] for b in u_data["bets"])
-        
-        # Чистый итог раунда (выиграно минус поставлено)
         net_round_change = total_payout_to_add - total_user_bets
 
-        # Обновляем баланс в базе (так как деньги уже списались в момент ставки, 
-        # нам нужно просто прибавить общую сумму выигрышей total_payout_to_add)
         balance, _ = await get_user(user_id)
         final_user_balance = max(0, balance + total_payout_to_add)
         await update_balance(user_id, final_user_balance)
@@ -466,7 +591,7 @@ async def process_roulette_bet(message: Message):
             
         parts = line_clean.split()
         if len(parts) != 2 or not parts[0].isdigit():
-            continue  # Пропускаем строки, которые не похожи на ставки
+            continue
 
         bet = int(parts[0])
         target = parts[1].lower()
@@ -474,7 +599,6 @@ async def process_roulette_bet(message: Message):
         if bet <= 0:
             continue
 
-        # Проверка валидности цели (число, диапазон или ключевое слово)
         is_number_bet = target.isdigit() and 0 <= int(target) <= 36
         is_range_bet = False
         if "-" in target:
@@ -488,7 +612,6 @@ async def process_roulette_bet(message: Message):
             parsed_bets.append({"bet": bet, "target": target})
             total_bet_sum += bet
 
-    # Если в сообщении нет ни одной валидной ставки, игнорируем его
     if not parsed_bets:
         return
 
@@ -508,7 +631,6 @@ async def process_roulette_bet(message: Message):
         await message.reply(f"❌ У тебя недостаточно ноксябаксов! Общая сумма ставок: <b>{total_bet_sum}</b>, а баланс: <b>{balance}</b>.", parse_mode="HTML")
         return
 
-    # Списываем общую сумму всех ставок сразу
     await update_balance(user_id, balance - total_bet_sum)
 
     current_time = time.time()
@@ -518,7 +640,6 @@ async def process_roulette_bet(message: Message):
             "bets": []
         }
 
-    # Добавляем все ставки в активную игру
     for b in parsed_bets:
         active_games[chat_id]["bets"].append({
             "user_id": user_id,
