@@ -192,7 +192,7 @@ async def cmd_admin_cheat(message: Message):
         await update_balance(user_id, new_balance)
         await message.reply(f"👑 <b>Админ-выдача:</b> Выдано <b>+{amount}</b> ноксябаксов!", parse_mode="HTML")
 
-# Списание денег (Админ): "забрать @username 500" или ответом "забрать 500"
+# Списание денег (Админ)
 @dp.message(F.text.lower().startswith(("забрать ", "списать ")))
 async def cmd_admin_take(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -237,13 +237,11 @@ async def process_transfer(message: Message):
     recipient_id = None
     amount = 0
 
-    # 1. Перевод ответом на сообщение
     if message.reply_to_message and not message.reply_to_message.from_user.is_bot:
         if len(parts) == 2 and parts[1].isdigit():
             recipient_id = message.reply_to_message.from_user.id
             amount = int(parts[1])
             
-    # 2. Перевод по юзернейму: "п @username 500"
     elif len(parts) == 3 and parts[2].isdigit():
         recipient_username = parts[1]
         amount = int(parts[2])
@@ -291,7 +289,6 @@ async def cmd_cancel_bets(message: Message):
         await message.reply("У тебя нет активных ставок в этом раунде!", parse_mode="HTML")
         return
 
-    # Подсчитываем сумму и возвращаем баланс
     refund_amount = sum(b["bet"] for b in user_bets)
     game["bets"] = [b for b in game["bets"] if b["user_id"] != user_id]
 
@@ -367,7 +364,7 @@ async def cmd_spin_go(message: Message):
                 if start <= number <= end:
                     total_numbers = (end - start) + 1
                     multiplier = 36 / total_numbers
-            except ValueError:
+            except Exception:
                 pass
         elif number != 0:
             if target == "к" and number in RED_NUMBERS:
@@ -388,15 +385,13 @@ async def cmd_spin_go(message: Message):
         balance, _ = await get_user(user_id)
 
         if multiplier > 0:
-            win_amount = int(bet * multiplier)
-            profit = win_amount - bet
-            new_balance = balance + profit
+            total_payout = int(bet * multiplier)
+            profit = total_payout - bet
+            new_balance = balance + total_payout
+            await update_balance(user_id, new_balance)
             results_text += f"🎉 {user_mention}: Выигрыш <b>+{profit}</b> ноксябаксов! (x{round(multiplier, 2)})\n"
         else:
-            # Деньги уже были списаны при ставке
             results_text += f"❌ {user_mention}: Потеряно <b>-{bet}</b> ноксябаксов.\n"
-
-        await update_balance(user_id, new_balance)
 
     await message.answer(results_text, parse_mode="HTML")
 
@@ -475,6 +470,10 @@ async def process_roulette_bet(message: Message):
 async def main():
     await init_db()
     await start_web_server()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
