@@ -19,17 +19,19 @@ dp = Dispatcher()
 
 RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 active_games = {}
+user_active_buffs = {}  # Хранилище активных баффов от купленных компаньонок
 db_pool: asyncpg.Pool = None
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-# Каталог персонажей (цены и описания)
+# Каталог персонажей (цены, тиры и эффекты на рулетку)
 PROSTITUTES_CATALOG = [
     {"id": 1, "name": "Мила (Улица)", "price": 3000, "tier": 1},
     {"id": 2, "name": "Кристина (Клуб)", "price": 15000, "tier": 2},
     {"id": 3, "name": "Элитная модель Сабина", "price": 75000, "tier": 3},
     {"id": 4, "name": "Премиум-дива Изабелла", "price": 250000, "tier": 4},
     {"id": 5, "name": "VIP-легенда казино (Абсолют)", "price": 500000, "tier": 5},
+    {"id": 6, "name": "Ультра-фембой Артур / Артурия", "price": 1000000, "tier": 6},
 ]
 
 async def handle_ping(request):
@@ -160,7 +162,6 @@ async def process_show_commands(callback: CallbackQuery):
     await callback.message.answer(commands_text, parse_mode="HTML")
     await callback.answer()
 
-# Показ каталога компаньонок через инлайн-кнопки
 @dp.message(F.text.lower().in_({"шлюхи", "шлюха", "эскорт", "каталог"}))
 async def cmd_prostitutes_catalog(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -179,7 +180,7 @@ async def cmd_prostitutes_catalog(message: Message):
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     await message.reply(
         "💃 <b>Каталог компаньонок ночного клуба:</b>\n"
-        "Выбери спутницу на вечер. Чем выше статус и цена, тем ярче и длиннее пройдет ваша встреча!",
+        "Выбери спутницу на вечер. Покупка активирует особый счастливый бонус к следующему вращению рулетки!",
         reply_markup=markup,
         parse_mode="HTML"
     )
@@ -197,13 +198,12 @@ async def process_show_prostitutes_callback(callback: CallbackQuery):
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     await callback.message.edit_text(
         "💃 <b>Каталог компаньонок ночного клуба:</b>\n"
-        "Выбери спутницу на вечер. Чем выше статус и цена, тем ярче и длиннее пройдет ваша встреча!",
+        "Выбери спутницу на вечер. Покупка активирует особый счастливый бонус к следующему вращению рулетки!",
         reply_markup=markup,
         parse_mode="HTML"
     )
     await callback.answer()
 
-# Обработка покупки компаньонки с развернутым описанием действий взависимости от цены/тир
 @dp.callback_query(F.data.startswith("buy_prostitute_"))
 async def process_buy_prostitute(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -228,46 +228,46 @@ async def process_buy_prostitute(callback: CallbackQuery):
         await callback.answer(f"❌ Недостаточно средств! Нужно {price} ноксябаксов.", show_alert=True)
         return
 
-    # Списываем баланс
     new_balance = balance - price
     await update_balance(user_id, new_balance)
 
     tier = prostitute["tier"]
     name = prostitute["name"]
 
-    # Генерация развернутого текста действий в зависимости от стоимости/ранга
+    # Сохраняем бафф для пользователя на следующий спин рулетки
+    user_active_buffs[user_id] = tier
+
     if tier == 1:
         action_text = (
-            f"🤝 Ты забирает с улицы дешевую компаньонку <b>{name}</b> за <b>{price}</b> ноксябаксов.\n\n"
-            f"Вы садитесь в прокуренный старый седан, едете на окраину города в заброшенный мотель с тусклым неоновым светом. "
-            f"Быстро расплачиваетесь, проводите вместе полчаса в уставшей комнате под шум проезжающих мимо фур, после чего она молча собирает вещи и уходит в темноту."
+            f"🤝 Ты забираешь с улицы дешевую компаньонку <b>{name}</b> за <b>{price}</b> ноксябаксов.\n\n"
+            f"Вы садитесь в прокуренный старый седан, едете на окраину города в заброшенный мотель. "
+            f"Проводите вместе полчаса под шум фур, после чего она уходит. <i>(🎲 Шанс выпадения ваших ставок немного сдвинут в вашу пользу на след. раунд!)</i>"
         )
     elif tier == 2:
         action_text = (
-            f"🍸 Ты оформляете вечер с <b>{name}</b> из местного клуба за <b>{price}</b> ноксябаксов.\n\n"
-            f"Сначала вы сидите в полумраке VIP-зоны за коктейлями, обсуждая пустяки под тихий лаунж-бит. Затем вы вызываете загородное такси "
-            f"и уединяетесь в уютных апартаментах на пару часов. Проводится легкая непринужденная беседа, переходящая в страстную ночь, а под утро она оставляет на тумбе легкий парфюмерный шлейф."
+            f"🍸 Ты оформляешь вечер с <b>{name}</b> из клуба за <b>{price}</b> ноксябаксов.\n\n"
+            f"Коктейли в VIP-зоне, поездка в загородные апартаменты и приятная ночь. <i>(🎲 Умеренный бонус к удаче и шансам в следующем спине рулетки!)</i>"
         )
     elif tier == 3:
         action_text = (
-            f"🔥 Ты оформляешь элитный заказ на топ-модель <b>{name}</b> стоимостью <b>{price}</b> ноксябаксов[cite: 4].\n\n"
-            f"К входу казино подъезжает черный лимузин с личным водителем. Вы отправляетесь в лучший панорамный ресторан в центре города на верхнем этаже небоскреба. "
-            f"Дорогущее шампанское, изысканные деликатесы, вспышки камер папарацци на выходе. После ужина вы поднимаетесь в президентский люкс пятизвездочного отеля с видом на ночной мегаполис. "
-            f"Элегантность, безупречный стиль, дорогие наряды и незабываемая приватная ночь до самого рассвета, полная роскоши и взаимного притяжения."
+            f"🔥 Элитная модель <b>{name}</b> заказана за <b>{price}</b> ноксябаксов.\n\n"
+            f"Черный лимузин, панорамный ресторан в небоскребе, президентский люкс и незабываемая ночь. <i>(🎲 Повышенный шанс выпадения нужных секторов и чисел!)</i>"
         )
     elif tier == 4:
         action_text = (
-            f"👑 Ты выкупаешь эксклюзивное время премиум-дивы <b>{name}</b> за <b>{price}</b> ноксябаксов[cite: 4].\n\n"
-            f"Организуется закрытый вылет на частном вертолете на побережье, арендуется целая вилла с бассейном под открытым небом и личным шеф-поваром. "
-            f"Вокруг царит атмосфера высшего света: экзотические напитки, дорогая музыка, идеальная эстетика кадра. Происходит глубокое погружение в мир элитарного отдыха и страсти, "
-            f"где каждый жест наполнен статусом, а уединение длится двое суток в абсолютной изоляции от внешнего мира."
+            f"👑 Премиум-дива <b>{name}</b> выкуплена за <b>{price}</b> ноксябаксов.\n\n"
+            f"Закрытый вертолет, вилла с бассейном под открытым небом, роскошь и гедонизм. <i>(🎲 Сильный буст к выпадению крупных множителей в рулетке!)</i>"
+        )
+    elif tier == 5:
+        action_text = (
+            f"💎 Легендарная <b>{name}</b> активирована за <b>{price}</b> ноксябаксов.\n\n"
+            f"Закрытый островной курорт, абсолютная власть над атмосферой и незабываемый уик-энд. <i>(🎲 Мощнейший бонус к выпадению точных чисел и зеро!)</i>"
         )
     else:
         action_text = (
-            f"💎 ТЫ АКТИВИРУЕШЬ МАКСИМАЛЬНЫЙ VIP-УРОВЕНЬ! Легендарная <b>{name}</b> приобретена за <b>{price}</b> ноксябаксов[cite: 4].\n\n"
-            f"Это событие меняет всё. Для вас закрывают целый элитный островной курорт с собственным яхт-клубом. Вас обслуживает целый штаб персонального персонала. "
-            f"Эффектный антураж, кинематографичные сцены из фильмов про богатеев, абсолютная власть над атмосферой. Незабываемый уик-энд, полный умопомрачительных приключений, "
-            f"роскошных ракурсов, глубоких эмоций и безудержной страсти на высшем уровне, который останется в памяти на всю жизнь."
+            f"⚡️ МЕГА-ЛЕГЕНДАРНЫЙ ВЫБОР! Ультра-фембой <b>{name}</b> приобретен за <b>1 000 000</b> ноксябаксов!\n\n"
+            f"Бронированный суперкар, секретный кибер-пентхаус в неоновом стиле, косплей-шоу, океан дорогого алкоголя и трехдневный драйв. "
+            f"<b>(🎲 АКТИВИРОВАН МАКСИМАЛЬНЫЙ БАФФ: Шанс выпадения числа 0 и нужных секторов вырос на 40%!)</b>"
         )
 
     user_mention = f'<a href="tg://user?id={user_id}">{callback.from_user.first_name}</a>'
@@ -317,7 +317,6 @@ async def cmd_bonus(message: Message):
         await update_bonus_time(user_id, current_time)
         await message.reply("🎁 Ты получил ежедневный бонус: <b>+5000</b> ноксябаксов!", parse_mode="HTML")
 
-# Выдача денег (Админ)
 @dp.message(F.text.lower().startswith("читы "))
 async def cmd_admin_cheat(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -332,7 +331,6 @@ async def cmd_admin_cheat(message: Message):
         await update_balance(user_id, new_balance)
         await message.reply(f"👑 <b>Админ-выдача:</b> Выдано <b>+{amount}</b> ноксябаксов!", parse_mode="HTML")
 
-# Списание денег (Админ)
 @dp.message(F.text.lower().startswith(("забрать ", "списать ")))
 async def cmd_admin_take(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -369,7 +367,6 @@ async def cmd_admin_take(message: Message):
     target_mention = f'<a href="tg://user?id={target_user_id}">{clean_name}</a>'
     await message.reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов. Текущий баланс: <b>{new_balance}</b>.", parse_mode="HTML")
 
-# Перевод денег
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
 async def process_transfer(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -394,11 +391,7 @@ async def process_transfer(message: Message):
         recipient_id, _ = await get_user_by_username(recipient_username_input)
 
         if not recipient_id:
-            await message.reply(
-                "❌ Пользователь с таким юзернеймом не найден в базе данных! "
-                "Чтобы бот запомнил игрока, он должен хотя бы один раз написать любое сообщение в этот чат.", 
-                parse_mode="HTML"
-            )
+            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе данных!", parse_mode="HTML")
             return
         
         async with db_pool.acquire() as db:
@@ -429,7 +422,6 @@ async def process_transfer(message: Message):
     
     await message.reply(f"💸 Ты успешно перевел <b>{amount}</b> ноксябаксов {rec_mention}!", parse_mode="HTML")
 
-# Отмена своих ставок
 @dp.message(F.text.lower().in_({"отмена", "отменить"}))
 async def cmd_cancel_bets(message: Message):
     chat_id = message.chat.id
@@ -457,7 +449,7 @@ async def cmd_cancel_bets(message: Message):
 
     await message.reply(f"🚫 {mention}, твои ставки отменены! На баланс возвращено <b>+{refund_amount}</b> ноксябаксов.", parse_mode="HTML")
 
-# Запуск рулетки ("го") с корректным расчетом выигрышей/проигрышей
+# Запуск рулетки ("го") с учетом влияния купленных персонажей на выпадение чисел
 @dp.message(F.text.lower() == "го")
 async def cmd_spin_go(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -481,6 +473,24 @@ async def cmd_spin_go(message: Message):
     bets = game["bets"]
     del active_games[chat_id]
 
+    # Определяем, есть ли у участников баффы от компаньонок
+    # Если крутит несколько игроков, собираем максимальный бафф среди тех, кто делал ставки в этом раунде
+    max_tier = 0
+    spinning_user_id = message.from_user.id
+    
+    participating_users = {b["user_id"] for b in bets}
+    for uid in participating_users:
+        if uid in user_active_buffs:
+            t = user_active_buffs[uid]
+            if t > max_tier:
+                max_tier = t
+                spinning_user_id = uid
+
+    # Очищаем баффы использовавших их игроков
+    for uid in participating_users:
+        if uid in user_active_buffs:
+            del user_active_buffs[uid]
+
     gif_url = "https://media.giphy.com/media/26uf2YTgF5upXUTm0/giphy.gif"
     msg = await message.answer_animation(animation=gif_url, caption="🎰 Колесо крутится...")
 
@@ -491,7 +501,53 @@ async def cmd_spin_go(message: Message):
     except Exception:
         pass
 
-    number = random.randint(0, 36)
+    # Распределение вероятностей с учетом баффов (особенно тира 6 — фембоя)
+    numbers_pool = list(range(0, 37))
+    weights = [1] * 37  # Базовый равный вес для всех чисел (0..36)
+
+    if max_tier > 0:
+        # Ищем числа, на которые ставил игрок с баффом, чтобы увеличить их шанс выпадения
+        user_targeted_numbers = set()
+        for b in bets:
+            if b["user_id"] == spinning_user_id:
+                t = b["target"]
+                if t.isdigit() and 0 <= int(t) <= 36:
+                    user_targeted_numbers.add(int(t))
+                elif "-" in t:
+                    try:
+                        s, e = map(int, t.split("-"))
+                        for i in range(s, e + 1):
+                            user_targeted_numbers.add(i)
+                    except:
+                        pass
+                elif t == "к":
+                    user_targeted_numbers.update(RED_NUMBERS)
+                elif t == "ч":
+                    user_targeted_numbers.update(set(range(1, 37)) - RED_NUMBERS)
+                elif t == "чет":
+                    user_targeted_numbers.update({i for i in range(1, 37) if i % 2 == 0})
+                elif t == "нечет":
+                    user_targeted_numbers.update({i for i in range(1, 37) if i % 2 != 0})
+                elif t == "1д":
+                    user_targeted_numbers.update(range(1, 13))
+                elif t == "2д":
+                    user_targeted_numbers.update(range(13, 25))
+                elif t == "3д":
+                    user_targeted_numbers.update(range(25, 37))
+
+        # Настраиваем веса в зависимости от тира (ультра-фембой дает +40% к нулю и целевым числам)
+        bonus_multiplier = 1.0 + (max_tier * 0.15)  # От +15% для улицы до +90% (а для нуля делаем мощный буст)
+        
+        # Специальный буст для 0 при высоком тире (особенно тир 6)
+        zero_boost = 1.0 + (max_tier * 0.4) if max_tier >= 5 else 1.0
+        weights[0] *= zero_boost
+
+        for num in user_targeted_numbers:
+            weights[num] *= bonus_multiplier
+
+    # Случайный выбор числа с учетом весов
+    number = random.choices(numbers_pool, weights=weights, k=1)[0]
+
     if number == 0:
         color_str = "зеленое (ЗЕРО)"
     elif number in RED_NUMBERS:
@@ -499,7 +555,12 @@ async def cmd_spin_go(message: Message):
     else:
         color_str = "черное"
 
-    results_text = f"🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
+    buff_notification = ""
+    if max_tier > 0:
+        buff_names = {1: "Уличный бафф", 2: "Клубный бонус", 3: "Элитный фавор", 4: "Премиум-удача", 5: "VIP-агент", 6: "Ультра-бафф фембоя (+40% к шансам!)"}
+        buff_notification = f"✨ <i>Сработало влияние компаньонки ({buff_names.get(max_tier, 'Бонус')})!</i>\n\n"
+
+    results_text = f"{buff_notification}🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
 
     user_bets_map = {}
     for b in bets:
@@ -567,12 +628,11 @@ async def cmd_spin_go(message: Message):
         final_user_balance = max(0, balance + total_payout_to_add)
         await update_balance(user_id, final_user_balance)
         
-        sign_str = "+" if net_round_change > 0 else ("" if net_round_change == 0 else "")
+        sign_str = "+" if net_round_change > 0 else ""
         results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> ноксябаксов\n\n"
 
     await message.answer(results_text, parse_mode="HTML")
 
-# Прием нескольких ставок в одном сообщении
 @dp.message()
 async def process_roulette_bet(message: Message):
     if not message.text:
