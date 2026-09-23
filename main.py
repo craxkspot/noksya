@@ -140,12 +140,12 @@ async def process_show_commands(callback: CallbackQuery):
         "• <code>п @username &lt;сумма&gt;</code> или ответом — перевести деньги\n"
         "• <code>отмена</code> — отменить свои несыгравшие ставки\n"
         "• <code>го</code> — запустить рулетку после ставок (доступно через 10 сек)\n\n"
-        "🎰 <b>Варианты ставок в рулетке:</b>\n"
+        "🎰 <b>Варианты ставок в рулетке (можно писать по несколько штук в одном сообщении):</b>\n"
         "• На цвет: <code>к</code> (красное), <code>ч</code> (черное)\n"
         "• На четность: <code>чет</code>, <code>нечет</code>\n"
         "• На дюжину: <code>1д</code>, <code>2д</code>, <code>3д</code>\n"
         "• На число: от <code>0</code> до <code>36</code> (умножение x36)\n"
-        "• На <b>любой диапазон</b>: <code>1-12</code>, <code>1-15</code>, <code>5-20</code> и т.д."
+        "• На <b>диапазон</b>: <code>1-12</code>, <code>5-20</code> и т.д."
     )
     await callback.message.answer(commands_text, parse_mode="HTML")
     await callback.answer()
@@ -225,7 +225,6 @@ async def cmd_admin_take(message: Message):
         if not target_user_id:
             await message.reply("❌ Пользователь с таким юзернеймом не найден в базе данных!", parse_mode="HTML")
             return
-        # Пробуем подтянуть имя из базы или юзернейм
         target_name = target_username
 
     if not target_user_id or amount <= 0:
@@ -240,7 +239,7 @@ async def cmd_admin_take(message: Message):
     target_mention = f'<a href="tg://user?id={target_user_id}">{clean_name}</a>'
     await message.reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов. Текущий баланс: <b>{new_balance}</b>.", parse_mode="HTML")
 
-# Перевод денег (с поддержкой поиска по юзернейму в чате, если пользователя нет в базе)
+# Перевод денег
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
 async def process_transfer(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -250,37 +249,19 @@ async def process_transfer(message: Message):
     parts = message.text.strip().split()
     sender_id = message.from_user.id
     recipient_id = None
-    recipient_username_str = None
     recipient_name = None
     amount = 0
 
-    # 1. Перевод ответом на сообщение
     if message.reply_to_message and not message.reply_to_message.from_user.is_bot:
         if len(parts) == 2 and parts[1].isdigit():
             recipient_id = message.reply_to_message.from_user.id
             recipient_name = message.reply_to_message.from_user.first_name
-            recipient_username_str = message.reply_to_message.from_user.username
             amount = int(parts[1])
             
-    # 2. Перевод по юзернейму: "п @username 500"
     elif len(parts) == 3 and parts[2].isdigit():
         recipient_username_input = parts[1]
         amount = int(parts[2])
-        
-        # Сначала ищем в нашей базе данных
         recipient_id, _ = await get_user_by_username(recipient_username_input)
-        
-        # Если в базе нет, пробуем найти через Telegram API (если бот в группе и пользователь в ней есть)
-        if not recipient_id and message.chat.type in ["group", "supergroup"]:
-            clean_uname = recipient_username_input.lstrip("@")
-            try:
-                # В aiogram 3 для поиска по юзернейму прямого метода нет, 
-                # но если пользователь упоминается, можно использовать get_chat или чат участников (если админ).
-                # Универсальный обход: попросим написать боту или проверим через пересылку, 
-                # но для обычных групп Telegram не дает по юзернейму вытянуть ID без сообщения.
-                pass
-            except Exception:
-                pass
 
         if not recipient_id:
             await message.reply(
@@ -290,7 +271,6 @@ async def process_transfer(message: Message):
             )
             return
         
-        # Если нашли в базе, подтягиваем его имя
         async with db_pool.acquire() as db:
             row = await db.fetchrow("SELECT username FROM users WHERE user_id = $1", recipient_id)
             recipient_name = row["username"] if row and row["username"] else recipient_username_input
@@ -436,26 +416,58 @@ async def cmd_spin_go(message: Message):
             profit = total_payout - bet
             new_balance = balance + total_payout
             await update_balance(user_id, new_balance)
-            results_text += f"🎉 {user_mention}: Выигрыш <b>+{profit}</b> ноксябаксов! (x{round(multiplier, 2)})\n"
+            results_text += f"🎉 {user_mention}: Выигрыш <b>+{profit}</b> ноксябаксов на <code>{target}</code>! (x{round(multiplier, 2)})\n"
         else:
-            results_text += f"❌ {user_mention}: Потеряно <b>-{bet}</b> ноксябаксов.\n"
+            results_text += f"❌ {user_mention}: Проигрыш <b>-{bet}</b> ноксябаксов на <code>{target}</code>.\n"
 
     await message.answer(results_text, parse_mode="HTML")
 
-# Прием ставок
+# Прием нескольких ставок в одном сообщении
 @dp.message()
 async def process_roulette_bet(message: Message):
-    text = message.text.strip().lower().split()
-    
-    if len(text) != 2 or not text[0].isdigit():
+    text_lines = message.text.strip().split("\n")
+    parsed_bets = []
+    total_bet_sum = 0
+
+    valid_targets = {"к", "ч", "чет", "нечет", "1д", "2д", "3д"}
+
+    for line in text_lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+            
+        parts = line_clean.split()
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue  # Пропускаем строки, которые не похожи на ставки
+
+        bet = int(parts[0])
+        target = parts[1].lower()
+
+        if bet <= 0:
+            continue
+
+        # Проверка валидности цели (число, диапазон или ключевое слово)
+        is_number_bet = target.isdigit() and 0 <= int(target) <= 36
+        is_range_bet = False
+        if "-" in target:
+            range_parts = target.split("-")
+            if len(range_parts) == 2 and range_parts[0].isdigit() and range_parts[1].isdigit():
+                start, end = int(range_parts[0]), int(range_parts[1])
+                if 0 <= start < end <= 36:
+                    is_range_bet = True
+
+        if is_number_bet or is_range_bet or target in valid_targets:
+            parsed_bets.append({"bet": bet, "target": target})
+            total_bet_sum += bet
+
+    # Если в сообщении нет ни одной валидной ставки, игнорируем его
+    if not parsed_bets:
         return
 
     if not await check_subscription(message.from_user.id):
         await send_sub_request(message)
         return
 
-    bet = int(text[0])
-    target = text[1]
     user_id = message.from_user.id
     chat_id = message.chat.id
 
@@ -464,29 +476,12 @@ async def process_roulette_bet(message: Message):
 
     balance, _ = await get_user(user_id, message.from_user.username)
 
-    if bet <= 0:
-        await message.reply("Ставка должна быть больше 0!", parse_mode="HTML")
+    if total_bet_sum > balance:
+        await message.reply(f"❌ У тебя недостаточно ноксябаксов! Общая сумма ставок: <b>{total_bet_sum}</b>, а баланс: <b>{balance}</b>.", parse_mode="HTML")
         return
 
-    if bet > balance:
-        await message.reply("У тебя недостаточно ноксябаксов!", parse_mode="HTML")
-        return
-
-    valid_targets = {"к", "ч", "чет", "нечет", "1д", "2д", "3д"}
-    is_number_fd = target.isdigit() and 0 <= int(target) <= 36
-
-    is_range_bet = False
-    if "-" in target:
-        parts = target.split("-")
-        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-            start, end = int(parts[0]), int(parts[1])
-            if 0 <= start < end <= 36:
-                is_range_bet = True
-
-    if not is_number_fd and not is_range_bet and target not in valid_targets:
-        return
-
-    await update_balance(user_id, balance - bet)
+    # Списываем общую сумму всех ставок сразу
+    await update_balance(user_id, balance - total_bet_sum)
 
     current_time = time.time()
     if chat_id not in active_games:
@@ -495,20 +490,25 @@ async def process_roulette_bet(message: Message):
             "bets": []
         }
 
-    active_games[chat_id]["bets"].append({
-        "user_id": user_id,
-        "user_name": user_name,
-        "bet": bet,
-        "target": target
-    })
+    # Добавляем все ставки в активную игру
+    for b in parsed_bets:
+        active_games[chat_id]["bets"].append({
+            "user_id": user_id,
+            "user_name": user_name,
+            "bet": b["bet"],
+            "target": b["target"]
+        })
 
     passed = current_time - active_games[chat_id]["start_time"]
     remaining = max(0, int(10 - passed))
 
     timer_info = f" Запустить колесо можно через <b>{remaining}</b> сек (команда <code>го</code>)." if remaining > 0 else " Напишите <code>го</code> для запуска!"
 
+    bets_list_str = "\n".join([f"• <b>{b['bet']}</b> на <code>{b['target']}</code>" for b in parsed_bets])
+
     await message.reply(
-        f"✅ {user_mention}, ставка принята: <b>{bet}</b> ноксябаксов на <b>{target}</b>.\n"
+        f"✅ {user_mention}, принято ставок: <b>{len(parsed_bets)}</b> (общая сумма: <b>{total_bet_sum}</b>):\n"
+        f"{bets_list_str}\n"
         f"{timer_info}",
         parse_mode="HTML"
     )
