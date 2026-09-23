@@ -2,7 +2,6 @@ import asyncio
 import random
 import time
 import os
-import re
 from aiohttp import web
 
 import asyncpg
@@ -140,7 +139,7 @@ async def process_show_commands(callback: CallbackQuery):
         "• <code>п @username &lt;сумма&gt;</code> или ответом — перевести деньги\n"
         "• <code>отмена</code> — отменить свои несыгравшие ставки\n"
         "• <code>го</code> — запустить рулетку после ставок (доступно через 10 сек)\n\n"
-        "🎰 <b>Варианты ставок в рулетке (можно писать по несколько штук в одном сообщении):</b>\n"
+        "🎰 <b>Варианты ставок в рулетке (можно писать по несколько штук в одном сообщении с новой строки):</b>\n"
         "• На цвет: <code>к</code> (красное), <code>ч</code> (черное)\n"
         "• На четность: <code>чет</code>, <code>нечет</code>\n"
         "• На дюжину: <code>1д</code>, <code>2д</code>, <code>3д</code>\n"
@@ -327,7 +326,7 @@ async def cmd_cancel_bets(message: Message):
 
     await message.reply(f"🚫 {mention}, твои ставки отменены! На баланс возвращено <b>+{refund_amount}</b> ноксябаксов.", parse_mode="HTML")
 
-# Запуск рулетки ("го")
+# Запуск рулетки ("го") с детальным выводом результатов
 @dp.message(F.text.lower() == "го")
 async def cmd_spin_go(message: Message):
     if not await check_subscription(message.from_user.id):
@@ -371,60 +370,83 @@ async def cmd_spin_go(message: Message):
 
     results_text = f"🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
 
+    # Группируем ставки по пользователям
+    user_bets_map = {}
     for b in bets:
-        user_id = b["user_id"]
-        user_name = b["user_name"]
+        uid = b["user_id"]
+        if uid not in user_bets_map:
+            user_bets_map[uid] = {
+                "name": b["user_name"],
+                "bets": []
+            }
+        user_bets_map[uid]["bets"].append(b)
+
+    for user_id, u_data in user_bets_map.items():
+        user_name = u_data["name"]
         user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
         
-        bet = b["bet"]
-        target = b["target"]
+        results_text += f"👤 <b>{user_mention}</b>:\n"
 
-        multiplier = 0
-        is_number_bet = target.isdigit() and 0 <= int(target) <= 36
+        net_change = 0 # Итоговое изменение баланса за раунд (чистая прибыль минус проигрыши)
 
-        if is_number_bet and int(target) == number:
-            multiplier = 36
-        elif "-" in target:
-            try:
-                start_str, end_str = target.split("-")
-                start, end = int(start_str), int(end_str)
-                if start <= number <= end:
-                    total_numbers = (end - start) + 1
-                    multiplier = 36 / total_numbers
-            except Exception:
-                pass
-        elif number != 0:
-            if target == "к" and number in RED_NUMBERS:
-                multiplier = 2
-            elif target == "ч" and number not in RED_NUMBERS:
-                multiplier = 2
-            elif target == "чет" and number % 2 == 0:
-                multiplier = 2
-            elif target == "нечет" and number % 2 != 0:
-                multiplier = 2
-            elif target == "1д" and 1 <= number <= 12:
-                multiplier = 3
-            elif target == "2д" and 13 <= number <= 24:
-                multiplier = 3
-            elif target == "3д" and 25 <= number <= 36:
-                multiplier = 3
+        for b in u_data["bets"]:
+            bet = b["bet"]
+            target = b["target"]
+            multiplier = 0
+            is_number_bet = target.isdigit() and 0 <= int(target) <= 36
 
+            if is_number_bet and int(target) == number:
+                multiplier = 36
+            elif "-" in target:
+                try:
+                    start_str, end_str = target.split("-")
+                    start, end = int(start_str), int(end_str)
+                    if start <= number <= end:
+                        total_numbers = (end - start) + 1
+                        multiplier = 36 / total_numbers
+                except Exception:
+                    pass
+            elif number != 0:
+                if target == "к" and number in RED_NUMBERS:
+                    multiplier = 2
+                elif target == "ч" and number not in RED_NUMBERS:
+                    multiplier = 2
+                elif target == "чет" and number % 2 == 0:
+                    multiplier = 2
+                elif target == "нечет" and number % 2 != 0:
+                    multiplier = 2
+                elif target == "1д" and 1 <= number <= 12:
+                    multiplier = 3
+                elif target == "2д" and 13 <= number <= 24:
+                    multiplier = 3
+                elif target == "3д" and 25 <= number <= 36:
+                    multiplier = 3
+
+            if multiplier > 0:
+                total_payout = int(bet * multiplier)
+                profit = total_payout - bet
+                net_change += profit
+                results_text += f"  ▫️ Ставка <code>{bet}</code> на <code>{target}</code> — ✅ Выигрыш <b>+{profit}</b> (x{round(multiplier, 2)})\n"
+            else:
+                net_change -= bet
+                results_text += f"  ▫️ Ставка <code>{bet}</code> на <code>{target}</code> — ❌ Проигрыш <b>-{bet}</b>\n"
+
+        # Обновляем баланс в базе (ставки уже были списаны при создании, поэтому прибавляем net_change)
         balance, _ = await get_user(user_id)
-
-        if multiplier > 0:
-            total_payout = int(bet * multiplier)
-            profit = total_payout - bet
-            new_balance = balance + total_payout
-            await update_balance(user_id, new_balance)
-            results_text += f"🎉 {user_mention}: Выигрыш <b>+{profit}</b> ноксябаксов на <code>{target}</code>! (x{round(multiplier, 2)})\n"
-        else:
-            results_text += f"❌ {user_mention}: Проигрыш <b>-{bet}</b> ноксябаксов на <code>{target}</code>.\n"
+        final_user_balance = max(0, balance + net_change)
+        await update_balance(user_id, final_user_balance)
+        
+        sign_str = "+" if net_change >  0 else ""
+        results_text += f"  💰 Итог раунда: <b>{sign_str}{net_change}</b> ноксябаксов\n\n"
 
     await message.answer(results_text, parse_mode="HTML")
 
 # Прием нескольких ставок в одном сообщении
 @dp.message()
 async def process_roulette_bet(message: Message):
+    if not message.text:
+        return
+
     text_lines = message.text.strip().split("\n")
     parsed_bets = []
     total_bet_sum = 0
