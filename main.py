@@ -89,7 +89,6 @@ async def init_db():
             )
         """)
 
-# ИСПРАВЛЕННАЯ ФУНКЦИЯ GET_USER
 async def get_user(user_id: int, username: str = None):
     async with db_pool.acquire() as db:
         row = await db.fetchrow("SELECT balance, last_bonus FROM users WHERE user_id = $1", user_id)
@@ -418,8 +417,6 @@ async def process_transfer(message: Message):
         await message.reply("У тебя недостаточно ноксябаксов!", parse_mode="HTML")
         return
 
-    # Здесь раньше бот падал, если получателя еще не было в базе. 
-    # Теперь новая функция get_user его создаст.
     recipient_balance, _ = await get_user(recipient_id)
 
     await update_balance(sender_id, sender_balance - amount)
@@ -564,7 +561,10 @@ async def cmd_spin_go(message: Message):
             5: "VIP-оргия", 
             6: "Ультра-фембой бафф (95% победы!)"
         }
-        buff_notification = f"🔞 <i>Сработал ваш персональный бафф компаньонки ({buff_names.get(active_tier, 'Бонус')})! Исход скорректирован в вашу пользу.</i>\n\n"
+        if forced_number is not None:
+            buff_notification = f"🔞 <i>Сработал ваш персональный бафф компаньонки ({buff_names.get(active_tier, 'Бонус')})! Исход 100% скорректирован в вашу пользу.</i>\n\n"
+        else:
+            buff_notification = f"🔞 <i>Бафф компаньонки ({buff_names.get(active_tier, 'Бонус')}) повысил шансы сектора, но рулетка распорядилась иначе...</i>\n\n"
 
     results_text = f"{buff_notification}🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
 
@@ -630,8 +630,6 @@ async def cmd_spin_go(message: Message):
         total_user_bets = sum(b["bet"] for b in u_data["bets"])
         net_round_change = total_payout_to_add - total_user_bets
 
-        # Здесь раньше тоже была ошибка, если человек не был в базе. 
-        # С новой версией get_user всё отработает штатно.
         balance, _ = await get_user(user_id)
         final_user_balance = max(0, balance + total_payout_to_add)
         await update_balance(user_id, final_user_balance)
@@ -639,7 +637,6 @@ async def cmd_spin_go(message: Message):
         sign_str = "+" if net_round_change > 0 else ""
         results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> ноксябаксов\n\n"
 
-    # Безопасная отправка результатов
     await message.bot.send_message(chat_id=chat_id, text=results_text, parse_mode="HTML")
 
 @dp.message()
