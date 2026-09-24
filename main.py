@@ -19,20 +19,10 @@ dp = Dispatcher()
 
 RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 active_games = {}
-user_active_buffs = {}  
+active_bj_games = {}
 db_pool: asyncpg.Pool = None
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
-PROSTITUTES_CATALOG = [
-    {"id": 1, "name": "Карина (Улица)", "price": 3000, "tier": 1},
-    {"id": 2, "name": "Катя (Клуб)", "price": 15000, "tier": 2},
-    {"id": 3, "name": "Элитная модель Липвкью", "price": 75000, "tier": 3},
-    {"id": 7, "name": "Пленница (Специально для Никиты)", "price": 150000, "tier": 3},
-    {"id": 4, "name": "Премиум-дива Седативка", "price": 250000, "tier": 4},
-    {"id": 5, "name": "VIP-ШЛЮХА КАЗИКА ДЛЯ ВЛАДА", "price": 500000, "tier": 5},
-    {"id": 6, "name": "Горячий фембойчик Олежик", "price": 1000000, "tier": 6},
-]
 
 async def handle_ping(request):
     return web.Response(text="OK")
@@ -127,8 +117,7 @@ async def update_bonus_time(user_id: int, current_time: int):
 def get_commands_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📜 Команды", callback_data="show_commands")],
-            [InlineKeyboardButton(text="💃 Каталог шлюх", callback_data="show_prostitutes")]
+            [InlineKeyboardButton(text="📜 Команды", callback_data="show_commands")]
         ]
     )
 
@@ -147,13 +136,13 @@ async def cmd_start(message: Message):
 @dp.callback_query(F.data == "show_commands")
 async def process_show_commands(callback: CallbackQuery):
     commands_text = (
-        "📌 <b>Команды бота (нужна подписка на @craxkspot и @noksyaa):</b>\n"
+        "📌 <b>Команды бота:</b>\n"
         "• <code>баланс</code> или <code>б</code> — узнать свой баланс\n"
         "• <code>бонус</code> — забрать ежедневный бонус\n"
         "• <code>п @username &lt;сумма&gt;</code> — перевести деньги\n"
         "• <code>отмена</code> — отменить свои несыгравшие ставки\n"
         "• <code>го</code> — запустить рулетку\n"
-        "• <code>шлюхи</code> — открыть каталог шлюх и компаньонок\n\n"
+        "• <code>бж &lt;сумма&gt;</code> (или <code>блекджек</code>) — сыграть в блекджек\n\n"
         "🎰 <b>Варианты ставок в рулетке:</b>\n"
         "• На цвет: <code>к</code> (красное), <code>ч</code> (черное)\n"
         "• На четность: <code>чет</code>, <code>нечет</code>\n"
@@ -162,137 +151,8 @@ async def process_show_commands(callback: CallbackQuery):
         "• На диапазон: <code>1-12</code>, <code>5-20</code>\n"
         "• Ставка всем балансом: <code>вабанк к</code> (или <code>ва-банк</code>)"
     )
-    await callback.message.answer(commands_text, parse_mode="HTML")
+    await callback.message.edit_text(commands_text, parse_mode="HTML")
     await callback.answer()
-
-@dp.message(F.text.lower().in_({"шлюхи", "шлюха", "эскорт", "каталог"}))
-async def cmd_prostitutes_catalog(message: Message):
-    if not await check_subscription(message.from_user.id):
-        await send_sub_request(message)
-        return
-
-    keyboard_buttons = []
-    for p in PROSTITUTES_CATALOG:
-        keyboard_buttons.append([
-            InlineKeyboardButton(
-                text=f"{p['name']} — {p['price']} 💰", 
-                callback_data=f"buy_prostitute_{p['id']}"
-            )
-        ])
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-    await message.reply(
-        "🔞 <b>Каталог ночных девок и компаньонок:</b>\n"
-        "Выбери шлюху на вечер. Каждая покупка персонально активирует мощный бафф к шансам следующей рулетки!",
-        reply_markup=markup,
-        parse_mode="HTML"
-    )
-
-@dp.callback_query(F.data.startswith("show_prostitutes"))
-async def process_show_prostitutes_callback(callback: CallbackQuery):
-    keyboard_buttons = []
-    for p in PROSTITUTES_CATALOG:
-        keyboard_buttons.append([
-            InlineKeyboardButton(
-                text=f"{p['name']} — {p['price']} 💰", 
-                callback_data=f"buy_prostitute_{p['id']}"
-            )
-        ])
-    markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-    await callback.message.edit_text(
-        "🔞 <b>Каталог ночных девок и компаньонок:</b>\n"
-        "Выбери шлюху на вечер. Каждая покупка персонально активирует мощный бафф к шансам следующей рулетки!",
-        reply_markup=markup,
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("buy_prostitute_"))
-async def process_buy_prostitute(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    if not await check_subscription(user_id):
-        await callback.answer("Нужна подписка на каналы!", show_alert=True)
-        return
-
-    try:
-        p_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        return
-
-    prostitute = next((p for p in PROSTITUTES_CATALOG if p["id"] == p_id), None)
-    if not prostitute:
-        await callback.answer("Персонаж не найден!", show_alert=True)
-        return
-
-    balance, _ = await get_user(user_id, callback.from_user.username)
-    price = prostitute["price"]
-
-    if balance < price:
-        await callback.answer(f"❌ Недостаточно средств! Нужно {price} ноксябаксов.", show_alert=True)
-        return
-
-    new_balance = balance - price
-    await update_balance(user_id, new_balance)
-
-    tier = prostitute["tier"]
-    name = prostitute["name"]
-
-    user_active_buffs[user_id] = tier
-
-    if p_id == 7:
-        action_text = (
-            f"🎥 Эксклюзивная грязная сучка <b>{name}</b> выкуплена за <b>{price}</b> ноксябаксов.\n\n"
-            f"Ты входишь в комнату, где она уже ждёт тебя — стоит на коленях, как беззащитная пленница перед казнью. У круглого стола закреплена камера, которая бездушно фиксирует каждое её унижение. Ты грубо берешь её, заставляя захлебываться стонами от животного страха и дикой, первобытной похоти. Жесткие, безжалостные толчки доводят её тело до исступления, и ты обильно кончаешь прямо на её покорное лицо под красной лампочкой записи. "
-            f"<i>(🎲 Персональный бафф: Серьезное увеличение шанса выпадения нужных секторов!)</i>"
-        )
-    elif tier == 1:
-        action_text = (
-            f"💀 Ты подбираешь на трассе дешевую шлюху <b>{name}</b> за <b>{price}</b> ноксябаксов.\n\n"
-            f"Закинул её в багажник «девятки», привёз на пустырь. Во время яростного соития на капоте она неожиданно так поперхнулась твоей спермой, закашлялась, пустила пузыри носом и откинула концы прямо посреди процесса! "
-            f"Пришлось прикапывать труп под кустом, но карма зарядила тебя удачей. "
-            f"<i>(🎲 Персональный бафф: Шанс выпадения твоих ставок в следующем спине повышен!)</i>"
-        )
-    elif tier == 2:
-        action_text = (
-            f"🚽 Ты снимаешь развратную шлюху <b>{name}</b> из придорожного клушника за <b>{price}</b> ноксябаксов.\n\n"
-            f"Она так усердно отрабатывала в тесной кабинке сортира, что захлебнулась слюной, с размаху впечаталась лбом в бачок унитаза и потеряла сознание. Ты вытащил её за волосы в коридор клуба, перешагнул через тело и пошёл крутить рулетку. "
-            f"<i>(🎲 Персональный бафф: Умеренный прирост удачи и вероятности выигрыша!)</i>"
-        )
-    elif tier == 3:
-        action_text = (
-            f"🔥 Элитная модель и дорогая содержанка <b>{name}</b> выкуплена за <b>{price}</b> ноксябаксов.\n\n"
-            f"Шикарные апартаменты в центре города, запах дорогого парфюма, тусклый свет и страстный, глубокий минет под элитное шампанское плавно перетекающий в жаркие, сочные позы на огромной двуспальной кровати под её громкие стоны. "
-            f"<i>(🎲 Персональный бафф: Серьезное увеличение шанса выпадения нужных секторов!)</i>"
-        )
-    elif tier == 4:
-        action_text = (
-            f"👑 Премиум-дива <b>{name}</b> заказана за <b>{price}</b> ноксябаксов.\n\n"
-            f"Элитный эскорт экстра-класса: идеальные изгибы тела, горячая кожа и безумный, страстный секс в президентском люксе. Каждый толчок отдается эхом эйфории, а кульминацией становится обильное извержение на её роскошное лицо. "
-            f"<i>(🎲 Персональный бафф: Мощный множитель на выпадение крупных коэффициентов!)</i>"
-        )
-    elif tier == 5:
-        action_text = (
-            f"💎 Легендарная VIP-легенда казино <b>{name}</b> твоя за <b>{price}</b> ноксябаксов.\n\n"
-            f"Невероятная богиня страсти устраивает тебе дикую, первобытную оргию на столах с фишками. Безумный темп, влажные шлепки, горячие стоны на всё казино и абсолютное подчинение в каждом движении. "
-            f"<i>(🎲 Персональный бафф: Огромный бонус к шансу выпадения точных чисел и зеро!)</i>"
-        )
-    else:
-        action_text = (
-            f"⚡️ МЕГА-ЛЕГЕНДАРНЫЙ ВЫБОР! Ультра-фембой <b>{name}</b> куплен за <b>1 000 000</b> ноксябаксов!\n\n"
-            f"Изумительный сочный femboy в черном латексе, упругих чулках и с утонченным макияжем полностью отдается тебе. "
-            f"Ты жестко и страстно штурмуешь его со всеми прелестями бдсм-фантазий под сладкие вздохи и безумный драйв. "
-            f"<b>(🔥 АКТИВИРОВАН МАКСИМАЛЬНЫЙ БАФФ: Шанс выпадения числа 0 и твоих ставок вырос до 95%!)</b>"
-        )
-
-    user_mention = f'<a href="tg://user?id={user_id}">{callback.from_user.first_name}</a>'
-    
-    await callback.message.edit_text(
-        f"✅ {user_mention}, сделка оформлена!\n\n"
-        f"{action_text}\n\n"
-        f"💰 Остаток на балансе: <b>{new_balance}</b> ноксябаксов.",
-        parse_mode="HTML"
-    )
-    await callback.answer("Успешно!")
 
 @dp.message(F.text.lower().in_({"баланс", "б", "/balance"}))
 async def cmd_balance(message: Message):
@@ -435,6 +295,199 @@ async def process_transfer(message: Message):
     
     await message.reply(f"💸 Ты успешно перевел <b>{amount}</b> ноксябаксов {rec_mention}!", parse_mode="HTML")
 
+# ================= БЛЕКДЖЕК =================
+
+def get_deck():
+    suits = ['♠', '♥', '♦', '♣']
+    ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+    deck = [(r, s) for s in suits for r in ranks]
+    random.shuffle(deck)
+    return deck
+
+def calc_hand(hand):
+    value = 0
+    aces = 0
+    for rank, _ in hand:
+        if rank in ['J', 'Q', 'K']:
+            value += 10
+        elif rank == 'A':
+            aces += 1
+            value += 11
+        else:
+            value += int(rank)
+    while value > 21 and aces > 0:
+        value -= 10
+        aces -= 1
+    return value
+
+def hand_str(hand):
+    return " ".join([f"{r}{s}" for r, s in hand])
+
+@dp.message(F.text.lower().startswith(("бж ", "блекджек ")))
+async def cmd_blackjack(message: Message):
+    user_id = message.from_user.id
+
+    if not await check_subscription(user_id):
+        await send_sub_request(message)
+        return
+
+    if user_id in active_bj_games:
+        await message.reply("У тебя уже есть активная игра в блекджек! Закончи её.", parse_mode="HTML")
+        return
+
+    text = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк").split()
+    if len(text) != 2:
+        return
+
+    balance, _ = await get_user(user_id, message.from_user.username)
+    
+    if text[1] == "вабанк":
+        bet = balance
+    elif text[1].isdigit():
+        bet = int(text[1])
+    else:
+        return
+
+    if bet <= 0:
+        return
+    if bet > balance:
+        await message.reply(f"❌ Недостаточно средств! Баланс: <b>{balance}</b>.", parse_mode="HTML")
+        return
+
+    await update_balance(user_id, balance - bet)
+
+    deck = get_deck()
+    player_hand = [deck.pop(), deck.pop()]
+    dealer_hand = [deck.pop(), deck.pop()]
+
+    player_val = calc_hand(player_hand)
+    
+    if player_val == 21:
+        dealer_val = calc_hand(dealer_hand)
+        if dealer_val == 21:
+            await update_balance(user_id, balance) # Ничья, возврат
+            result_txt = (
+                f"🃏 <b>Блекджек</b> | Ставка: {bet}\n\n"
+                f"Твои карты: {hand_str(player_hand)} (21)\n"
+                f"Карты дилера: {hand_str(dealer_hand)} (21)\n\n"
+                f"🤝 <b>Ничья!</b> У обоих Блекджек. Возврат ставки."
+            )
+        else:
+            win_amount = int(bet * 2.5) # Блекджек платит 3:2
+            await update_balance(user_id, (balance - bet) + win_amount)
+            result_txt = (
+                f"🃏 <b>Блекджек</b> | Ставка: {bet}\n\n"
+                f"Твои карты: {hand_str(player_hand)} (21)\n"
+                f"Карты дилера: {hand_str(dealer_hand)} ({dealer_val})\n\n"
+                f"🎉 <b>БЛЕКДЖЕК!</b> Выигрыш: <b>+{win_amount - bet}</b>"
+            )
+        await message.reply(result_txt, parse_mode="HTML")
+        return
+
+    active_bj_games[user_id] = {
+        "bet": bet,
+        "deck": deck,
+        "player_hand": player_hand,
+        "dealer_hand": dealer_hand
+    }
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🃏 Ещё", callback_data="bj_hit"),
+         InlineKeyboardButton(text="🛑 Хватит", callback_data="bj_stand")]
+    ])
+
+    await message.reply(
+        f"🃏 <b>Блекджек</b> | Ставка: {bet}\n\n"
+        f"Твои карты: {hand_str(player_hand)} ({player_val})\n"
+        f"Карты дилера: {dealer_hand[0][0]}{dealer_hand[0][1]} 🎴 (?)\n\n"
+        f"Твой ход:",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data == "bj_hit")
+async def process_bj_hit(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id not in active_bj_games:
+        await callback.answer("Игра не найдена или уже завершена.", show_alert=True)
+        return
+
+    game = active_bj_games[user_id]
+    game["player_hand"].append(game["deck"].pop())
+    
+    player_val = calc_hand(game["player_hand"])
+    
+    if player_val > 21:
+        del active_bj_games[user_id]
+        await callback.message.edit_text(
+            f"🃏 <b>Блекджек</b> | Ставка: {game['bet']}\n\n"
+            f"Твои карты: {hand_str(game['player_hand'])} ({player_val})\n"
+            f"Карты дилера: {game['dealer_hand'][0][0]}{game['dealer_hand'][0][1]} 🎴\n\n"
+            f"💥 <b>Перебор!</b> Ты проиграл <b>{game['bet']}</b> ноксябаксов.",
+            parse_mode="HTML"
+        )
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🃏 Ещё", callback_data="bj_hit"),
+             InlineKeyboardButton(text="🛑 Хватит", callback_data="bj_stand")]
+        ])
+        await callback.message.edit_text(
+            f"🃏 <b>Блекджек</b> | Ставка: {game['bet']}\n\n"
+            f"Твои карты: {hand_str(game['player_hand'])} ({player_val})\n"
+            f"Карты дилера: {game['dealer_hand'][0][0]}{game['dealer_hand'][0][1]} 🎴 (?)\n\n"
+            f"Твой ход:",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    await callback.answer()
+
+@dp.callback_query(F.data == "bj_stand")
+async def process_bj_stand(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id not in active_bj_games:
+        await callback.answer("Игра не найдена или уже завершена.", show_alert=True)
+        return
+
+    game = active_bj_games[user_id]
+    del active_bj_games[user_id]
+
+    player_val = calc_hand(game["player_hand"])
+    dealer_hand = game["dealer_hand"]
+    deck = game["deck"]
+    bet = game["bet"]
+
+    dealer_val = calc_hand(dealer_hand)
+    while dealer_val < 17:
+        dealer_hand.append(deck.pop())
+        dealer_val = calc_hand(dealer_hand)
+
+    balance, _ = await get_user(user_id)
+    
+    if dealer_val > 21:
+        win_amount = bet * 2
+        await update_balance(user_id, balance + win_amount)
+        result_msg = f"🎉 <b>Дилер перебрал!</b> Ты выиграл <b>+{bet}</b>."
+    elif dealer_val > player_val:
+        result_msg = f"💸 <b>Дилер выиграл.</b> Ты проиграл <b>{bet}</b>."
+    elif player_val > dealer_val:
+        win_amount = bet * 2
+        await update_balance(user_id, balance + win_amount)
+        result_msg = f"🎉 <b>Ты выиграл!</b> Плюс <b>+{bet}</b>."
+    else:
+        await update_balance(user_id, balance + bet)
+        result_msg = f"🤝 <b>Ничья.</b> Ставка <b>{bet}</b> возвращена."
+
+    await callback.message.edit_text(
+        f"🃏 <b>Блекджек</b> | Ставка: {bet}\n\n"
+        f"Твои карты: {hand_str(game['player_hand'])} ({player_val})\n"
+        f"Карты дилера: {hand_str(dealer_hand)} ({dealer_val})\n\n"
+        f"{result_msg}",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+# ================= РУЛЕТКА =================
+
 @dp.message(F.text.lower().in_({"отмена", "отменить"}))
 async def cmd_cancel_bets(message: Message):
     chat_id = message.chat.id
@@ -485,72 +538,16 @@ async def cmd_spin_go(message: Message):
     bets = game["bets"]
     del active_games[chat_id]
 
-    spinning_user_id = message.from_user.id
-    active_tier = user_active_buffs.get(spinning_user_id, 0)
-
-    if spinning_user_id in user_active_buffs:
-        del user_active_buffs[spinning_user_id]
-
     gif_url = "https://media.giphy.com/media/26uf2YTgF5upXUTm0/giphy.gif"
     msg = await message.answer_animation(animation=gif_url, caption="🎰 Колесо крутится...")
 
     await asyncio.sleep(3)
-
     try:
         await msg.delete()
     except Exception:
         pass
 
-    user_targeted_numbers = set()
-    user_bets_for_spinning_user = [b for b in bets if b["user_id"] == spinning_user_id]
-
-    for b in user_bets_for_spinning_user:
-        t = b["target"]
-        if t.isdigit() and 0 <= int(t) <= 36:
-            user_targeted_numbers.add(int(t))
-        elif "-" in t:
-            try:
-                s, e = map(int, t.split("-"))
-                for i in range(s, e + 1):
-                    user_targeted_numbers.add(i)
-            except:
-                pass
-        elif t == "к":
-            user_targeted_numbers.update(RED_NUMBERS)
-        elif t == "ч":
-            user_targeted_numbers.update(set(range(1, 37)) - RED_NUMBERS)
-        elif t == "чет":
-            user_targeted_numbers.update({i for i in range(1, 37) if i % 2 == 0})
-        elif t == "нечет":
-            user_targeted_numbers.update({i for i in range(1, 37) if i % 2 != 0})
-        elif t == "1д":
-            user_targeted_numbers.update(range(1, 13))
-        elif t == "2д":
-            user_targeted_numbers.update(range(13, 25))
-        elif t == "3д":
-            user_targeted_numbers.update(range(25, 37))
-
-    forced_number = None
-    if active_tier > 0 and user_bets_for_spinning_user and user_targeted_numbers:
-        force_chances = {1: 0.20, 2: 0.35, 3: 0.50, 4: 0.65, 5: 0.80, 6: 0.95}
-        chance = force_chances.get(active_tier, 0.40)
-
-        if random.random() < chance:
-            forced_number = random.choice(list(user_targeted_numbers))
-
-    if forced_number is not None:
-        number = forced_number
-    else:
-        numbers_pool = list(range(0, 37))
-        weights = [1.0] * 37
-        
-        if active_tier > 0 and user_targeted_numbers:
-            multiplier_boost = 1.0 + (active_tier * 0.5)
-            weights[0] *= (2.0 if active_tier == 6 else 1.3)
-            for num in user_targeted_numbers:
-                weights[num] *= multiplier_boost
-
-        number = random.choices(numbers_pool, weights=weights, k=1)[0]
+    number = random.randint(0, 36)
 
     if number == 0:
         color_str = "зеленое (ЗЕРО)"
@@ -559,22 +556,7 @@ async def cmd_spin_go(message: Message):
     else:
         color_str = "черное"
 
-    buff_notification = ""
-    if active_tier > 0:
-        buff_names = {
-            1: "Трассовый треш", 
-            2: "Клубный отруб", 
-            3: "Элитная страсть", 
-            4: "Премиум-эскорт", 
-            5: "VIP-оргия", 
-            6: "Ультра-фембой бафф (95% победы!)"
-        }
-        if forced_number is not None:
-            buff_notification = f"🔞 <i>Сработал ваш персональный бафф компаньонки ({buff_names.get(active_tier, 'Бонус')})! Исход 100% скорректирован в вашу пользу.</i>\n\n"
-        else:
-            buff_notification = f"🔞 <i>Бафф компаньонки ({buff_names.get(active_tier, 'Бонус')}) повысил шансы сектора, но рулетка распорядилась иначе...</i>\n\n"
-
-    results_text = f"{buff_notification}🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
+    results_text = f"🎯 Выпало: <b>{number}</b> ({color_str})\n\n"
 
     user_bets_map = {}
     for b in bets:
@@ -652,14 +634,12 @@ async def process_roulette_bet(message: Message):
     if not message.text:
         return
 
-    # Заменяем все варианты написания ва-банка на единый формат для простоты парсинга
     text_to_parse = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк")
     text_lines = text_to_parse.strip().split("\n")
     
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    # Заранее получаем баланс для отработки ва-банка
     balance, _ = await get_user(user_id, message.from_user.username)
     available_balance = balance
 
@@ -679,7 +659,6 @@ async def process_roulette_bet(message: Message):
             
         target = parts[1].lower()
 
-        # Обработка ва-банка
         if parts[0] == "вабанк":
             bet = available_balance
         elif parts[0].isdigit():
@@ -702,7 +681,7 @@ async def process_roulette_bet(message: Message):
         if is_number_bet or is_range_bet or target in valid_targets:
             parsed_bets.append({"bet": bet, "target": target})
             total_bet_sum += bet
-            available_balance -= bet  # Уменьшаем доступный баланс, если игрок ставит несколькими строками
+            available_balance -= bet 
 
     if not parsed_bets:
         return
