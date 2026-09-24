@@ -26,12 +26,12 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 # Каталог компаньонок
 PROSTITUTES_CATALOG = [
-    {"id": 1, "name": "Мила (Улица)", "price": 3000, "tier": 1},
-    {"id": 2, "name": "Кристина (Клуб)", "price": 15000, "tier": 2},
-    {"id": 3, "name": "Элитная модель Сабина", "price": 75000, "tier": 3},
-    {"id": 4, "name": "Премиум-дива Изабелла", "price": 250000, "tier": 4},
-    {"id": 5, "name": "VIP-легенда казино (Абсолют)", "price": 500000, "tier": 5},
-    {"id": 6, "name": "Ультра-фембой Артур / Артурия", "price": 1000000, "tier": 6},
+    {"id": 1, "name": "Карина (Улица)", "price": 3000, "tier": 1},
+    {"id": 2, "name": "Катя (Клуб)", "price": 15000, "tier": 2},
+    {"id": 3, "name": "Элитная модель Липвкью", "price": 75000, "tier": 3},
+    {"id": 4, "name": "Премиум-дива Седативка", "price": 250000, "tier": 4},
+    {"id": 5, "name": "VIP-ШЛЮХА КАЗИКА ДЛЯ ВЛАДА", "price": 500000, "tier": 5},
+    {"id": 6, "name": "Горячий фембойчик Олежик", "price": 1000000, "tier": 6},
 ]
 
 async def handle_ping(request):
@@ -103,8 +103,7 @@ async def get_user(user_id: int, username: str = None):
         
         if username:
             await db.execute("UPDATE users SET username = $1 WHERE user_id = $2", username.lower(), user_id)
-            
-        return row["balance"], row["last_bonus"]
+            return row["balance"], row["last_bonus"]
 
 async def get_user_by_username(username: str):
     username_clean = username.lstrip("@").lower()
@@ -198,7 +197,8 @@ async def process_show_prostitutes_callback(callback: CallbackQuery):
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     await callback.message.edit_text(
         "🔞 <b>Каталог ночных девок и компаньонок:</b>\n"
-        "Выбери шлюху на вечер. Каждая покупка персонально активирует мощный бафф к шансам следующей рулетки!",
+        "Выбери шлюху на вечер.
+    Каждая покупка персонально активирует мощный бафф к шансам следующей рулетки!",
         reply_markup=markup,
         parse_mode="HTML"
     )
@@ -271,7 +271,8 @@ async def process_buy_prostitute(callback: CallbackQuery):
     else:
         action_text = (
             f"⚡️ МЕГА-ЛЕГЕНДАРНЫЙ ВЫБОР! Ультра-фембой <b>{name}</b> куплен за <b>1 000 000</b> ноксябаксов!\n\n"
-            f"Изумительный сочный femboy в черном латексе, упругих чулках и с утонченным макияжем полностью отдается тебе. Ты жестко и страстно штурмуешь его со всеми прелестями бдсм-фантазий под сладкие вздохи и безумный драйв. "
+            f"Изумительный сочный femboy в черном латексе, упругих чулках и с утонченным макияжем полностью отдается тебе.
+    Ты жестко и страстно штурмуешь его со всеми прелестями бдсм-фантазий под сладкие вздохи и безумный драйв. "
             f"<b>(🔥 АКТИВИРОВАН МАКСИМАЛЬНЫЙ БАФФ: Шанс выпадения числа 0 и твоих ставок вырос до 95%!)</b>"
         )
 
@@ -370,7 +371,8 @@ async def cmd_admin_take(message: Message):
     
     clean_name = target_name.replace("<", "&lt;").replace(">", "&gt;")
     target_mention = f'<a href="tg://user?id={target_user_id}">{clean_name}</a>'
-    await message.reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов.", parse_mode="HTML")
+    await message.
+    reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов.", parse_mode="HTML")
 
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
 async def process_transfer(message: Message):
@@ -470,7 +472,8 @@ async def cmd_spin_go(message: Message):
 
     if passed_time < 10:
         remaining = int(10 - passed_time)
-        await message.reply(f"⏳ Подождите еще <b>{remaining}</b> сек. перед запуском!", parse_mode="HTML")
+        await message.reply(f"⏳ Подождите еще <b>{remaining}</b> сек.
+    перед запуском!", parse_mode="HTML")
         return
 
     bets = game["bets"]
@@ -590,7 +593,7 @@ async def cmd_spin_go(message: Message):
 
             if is_number_bet and int(target) == number:
                 multiplier = 36
-            elif "-" in target:
+    elif "-" in target:
                 try:
                     start_str, end_str = target.split("-")
                     start, end = int(start_str), int(end_str)
@@ -699,7 +702,7 @@ async def process_roulette_bet(message: Message):
     if chat_id not in active_games:
         active_games[chat_id] = {
             "start_time": current_time,
-            "bets": []
+    "bets": []
         }
 
     for b in parsed_bets:
@@ -727,6 +730,10 @@ async def process_roulette_bet(message: Message):
 async def main():
     await init_db()
     await start_web_server()
+    
+    # 🛠️ ИСПРАВЛЕНИЕ ОШИБКИ КОНФЛИКТА: принудительно удаляем вебхук перед запуском поллинга
+    await bot.delete_webhook(drop_pending_updates=True)
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
