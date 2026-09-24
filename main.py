@@ -632,7 +632,8 @@ async def cmd_spin_go(message: Message):
         sign_str = "+" if net_round_change > 0 else ""
         results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> ноксябаксов\n\n"
 
-    await message.answer(results_text, parse_mode="HTML")
+    # Безопасная отправка результатов в чат
+    await message.bot.send_message(chat_id=chat_id, text=results_text, parse_mode="HTML")
 
 @dp.message()
 async def process_roulette_bet(message: Message):
