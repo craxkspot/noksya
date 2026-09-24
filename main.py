@@ -19,12 +19,11 @@ dp = Dispatcher()
 
 RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 active_games = {}
-user_active_buffs = {}  # Персональное хранилище активных баффов: {user_id: tier}
+user_active_buffs = {}  
 db_pool: asyncpg.Pool = None
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-# Каталог компаньонок
 PROSTITUTES_CATALOG = [
     {"id": 1, "name": "Карина (Улица)", "price": 3000, "tier": 1},
     {"id": 2, "name": "Катя (Клуб)", "price": 15000, "tier": 2},
@@ -90,20 +89,24 @@ async def init_db():
             )
         """)
 
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ GET_USER
 async def get_user(user_id: int, username: str = None):
     async with db_pool.acquire() as db:
         row = await db.fetchrow("SELECT balance, last_bonus FROM users WHERE user_id = $1", user_id)
         if row is None:
-            uname = username.lower() if username else None
+            uname = username.lower() if username else "unknown"
             await db.execute(
-                "INSERT INTO users (user_id, username, balance, last_bonus) VALUES ($1, $2, 2000, 0)", 
+                "INSERT INTO users (user_id, username, balance, last_bonus) VALUES ($1, $2, 2000, 0) ON CONFLICT (user_id) DO NOTHING", 
                 user_id, uname
             )
             return 2000, 0
         
         if username:
             await db.execute("UPDATE users SET username = $1 WHERE user_id = $2", username.lower(), user_id)
-            return row["balance"], row["last_bonus"]
+            
+        balance = row["balance"] if row["balance"] is not None else 2000
+        last_bonus = row["last_bonus"] if row["last_bonus"] is not None else 0
+        return balance, last_bonus
 
 async def get_user_by_username(username: str):
     username_clean = username.lstrip("@").lower()
@@ -415,6 +418,8 @@ async def process_transfer(message: Message):
         await message.reply("У тебя недостаточно ноксябаксов!", parse_mode="HTML")
         return
 
+    # Здесь раньше бот падал, если получателя еще не было в базе. 
+    # Теперь новая функция get_user его создаст.
     recipient_balance, _ = await get_user(recipient_id)
 
     await update_balance(sender_id, sender_balance - amount)
@@ -625,6 +630,8 @@ async def cmd_spin_go(message: Message):
         total_user_bets = sum(b["bet"] for b in u_data["bets"])
         net_round_change = total_payout_to_add - total_user_bets
 
+        # Здесь раньше тоже была ошибка, если человек не был в базе. 
+        # С новой версией get_user всё отработает штатно.
         balance, _ = await get_user(user_id)
         final_user_balance = max(0, balance + total_payout_to_add)
         await update_balance(user_id, final_user_balance)
@@ -632,7 +639,7 @@ async def cmd_spin_go(message: Message):
         sign_str = "+" if net_round_change > 0 else ""
         results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> ноксябаксов\n\n"
 
-    # Безопасная отправка результатов в чат
+    # Безопасная отправка результатов
     await message.bot.send_message(chat_id=chat_id, text=results_text, parse_mode="HTML")
 
 @dp.message()
@@ -728,7 +735,6 @@ async def main():
     await init_db()
     await start_web_server()
     
-    # Принудительно удаляем вебхук перед запуском поллинга
     await bot.delete_webhook(drop_pending_updates=True)
     
     await dp.start_polling(bot)
