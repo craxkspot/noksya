@@ -28,6 +28,7 @@ PROSTITUTES_CATALOG = [
     {"id": 1, "name": "Карина (Улица)", "price": 3000, "tier": 1},
     {"id": 2, "name": "Катя (Клуб)", "price": 15000, "tier": 2},
     {"id": 3, "name": "Элитная модель Липвкью", "price": 75000, "tier": 3},
+    {"id": 7, "name": "Пленница (Специально для Никиты)", "price": 150000, "tier": 3},
     {"id": 4, "name": "Премиум-дива Седативка", "price": 250000, "tier": 4},
     {"id": 5, "name": "VIP-ШЛЮХА КАЗИКА ДЛЯ ВЛАДА", "price": 500000, "tier": 5},
     {"id": 6, "name": "Горячий фембойчик Олежик", "price": 1000000, "tier": 6},
@@ -148,17 +149,18 @@ async def process_show_commands(callback: CallbackQuery):
     commands_text = (
         "📌 <b>Команды бота (нужна подписка на @craxkspot и @noksyaa):</b>\n"
         "• <code>баланс</code> или <code>б</code> — узнать свой баланс\n"
-        "• <code>бонус</code> — забрать ежедневный бонус (5000 ноксябаксов)\n"
-        "• <code>п @username &lt;сумма&gt;</code> или ответом — перевести деньги\n"
+        "• <code>бонус</code> — забрать ежедневный бонус\n"
+        "• <code>п @username &lt;сумма&gt;</code> — перевести деньги\n"
         "• <code>отмена</code> — отменить свои несыгравшие ставки\n"
-        "• <code>го</code> — запустить рулетку после ставок (доступно через 10 сек)\n"
+        "• <code>го</code> — запустить рулетку\n"
         "• <code>шлюхи</code> — открыть каталог шлюх и компаньонок\n\n"
         "🎰 <b>Варианты ставок в рулетке:</b>\n"
         "• На цвет: <code>к</code> (красное), <code>ч</code> (черное)\n"
         "• На четность: <code>чет</code>, <code>нечет</code>\n"
         "• На дюжину: <code>1д</code>, <code>2д</code>, <code>3д</code>\n"
-        "• На число: от <code>0</code> до <code>36</code> (умножение x36)\n"
-        "• На <b>диапазон</b>: <code>1-12</code>, <code>5-20</code> и т.д."
+        "• На число: от <code>0</code> до <code>36</code>\n"
+        "• На диапазон: <code>1-12</code>, <code>5-20</code>\n"
+        "• Ставка всем балансом: <code>вабанк к</code> (или <code>ва-банк</code>)"
     )
     await callback.message.answer(commands_text, parse_mode="HTML")
     await callback.answer()
@@ -237,7 +239,13 @@ async def process_buy_prostitute(callback: CallbackQuery):
 
     user_active_buffs[user_id] = tier
 
-    if tier == 1:
+    if p_id == 7:
+        action_text = (
+            f"🎥 Эксклюзивная грязная сучка <b>{name}</b> выкуплена за <b>{price}</b> ноксябаксов.\n\n"
+            f"Ты входишь в комнату, где она уже ждёт тебя — стоит на коленях, как беззащитная пленница перед казнью. У круглого стола закреплена камера, которая бездушно фиксирует каждое её унижение. Ты грубо берешь её, заставляя захлебываться стонами от животного страха и дикой, первобытной похоти. Жесткие, безжалостные толчки доводят её тело до исступления, и ты обильно кончаешь прямо на её покорное лицо под красной лампочкой записи. "
+            f"<i>(🎲 Персональный бафф: Серьезное увеличение шанса выпадения нужных секторов!)</i>"
+        )
+    elif tier == 1:
         action_text = (
             f"💀 Ты подбираешь на трассе дешевую шлюху <b>{name}</b> за <b>{price}</b> ноксябаксов.\n\n"
             f"Закинул её в багажник «девятки», привёз на пустырь. Во время яростного соития на капоте она неожиданно так поперхнулась твоей спермой, закашлялась, пустила пузыри носом и откинула концы прямо посреди процесса! "
@@ -644,7 +652,17 @@ async def process_roulette_bet(message: Message):
     if not message.text:
         return
 
-    text_lines = message.text.strip().split("\n")
+    # Заменяем все варианты написания ва-банка на единый формат для простоты парсинга
+    text_to_parse = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк")
+    text_lines = text_to_parse.strip().split("\n")
+    
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # Заранее получаем баланс для отработки ва-банка
+    balance, _ = await get_user(user_id, message.from_user.username)
+    available_balance = balance
+
     parsed_bets = []
     total_bet_sum = 0
 
@@ -656,11 +674,18 @@ async def process_roulette_bet(message: Message):
             continue
             
         parts = line_clean.split()
-        if len(parts) != 2 or not parts[0].isdigit():
+        if len(parts) != 2:
             continue
-
-        bet = int(parts[0])
+            
         target = parts[1].lower()
+
+        # Обработка ва-банка
+        if parts[0] == "вабанк":
+            bet = available_balance
+        elif parts[0].isdigit():
+            bet = int(parts[0])
+        else:
+            continue
 
         if bet <= 0:
             continue
@@ -677,6 +702,7 @@ async def process_roulette_bet(message: Message):
         if is_number_bet or is_range_bet or target in valid_targets:
             parsed_bets.append({"bet": bet, "target": target})
             total_bet_sum += bet
+            available_balance -= bet  # Уменьшаем доступный баланс, если игрок ставит несколькими строками
 
     if not parsed_bets:
         return
@@ -685,13 +711,8 @@ async def process_roulette_bet(message: Message):
         await send_sub_request(message)
         return
 
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
     user_name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
     user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
-
-    balance, _ = await get_user(user_id, message.from_user.username)
 
     if total_bet_sum > balance:
         await message.reply(f"❌ Недостаточно средств! Сумма ставок: <b>{total_bet_sum}</b>, баланс: <b>{balance}</b>.", parse_mode="HTML")
