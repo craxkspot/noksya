@@ -197,8 +197,7 @@ async def process_show_prostitutes_callback(callback: CallbackQuery):
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     await callback.message.edit_text(
         "🔞 <b>Каталог ночных девок и компаньонок:</b>\n"
-        "Выбери шлюху на вечер.
-    Каждая покупка персонально активирует мощный бафф к шансам следующей рулетки!",
+        "Выбери шлюху на вечер. Каждая покупка персонально активирует мощный бафф к шансам следующей рулетки!",
         reply_markup=markup,
         parse_mode="HTML"
     )
@@ -236,7 +235,6 @@ async def process_buy_prostitute(callback: CallbackQuery):
 
     user_active_buffs[user_id] = tier
 
-    # Жесткие, смешные треш-сцены для дешевых, и красочный лютый разврат для дорогих
     if tier == 1:
         action_text = (
             f"💀 Ты подбираешь на трассе дешевую шлюху <b>{name}</b> за <b>{price}</b> ноксябаксов.\n\n"
@@ -271,8 +269,8 @@ async def process_buy_prostitute(callback: CallbackQuery):
     else:
         action_text = (
             f"⚡️ МЕГА-ЛЕГЕНДАРНЫЙ ВЫБОР! Ультра-фембой <b>{name}</b> куплен за <b>1 000 000</b> ноксябаксов!\n\n"
-            f"Изумительный сочный femboy в черном латексе, упругих чулках и с утонченным макияжем полностью отдается тебе.
-    Ты жестко и страстно штурмуешь его со всеми прелестями бдсм-фантазий под сладкие вздохи и безумный драйв. "
+            f"Изумительный сочный femboy в черном латексе, упругих чулках и с утонченным макияжем полностью отдается тебе. "
+            f"Ты жестко и страстно штурмуешь его со всеми прелестями бдсм-фантазий под сладкие вздохи и безумный драйв. "
             f"<b>(🔥 АКТИВИРОВАН МАКСИМАЛЬНЫЙ БАФФ: Шанс выпадения числа 0 и твоих ставок вырос до 95%!)</b>"
         )
 
@@ -371,8 +369,7 @@ async def cmd_admin_take(message: Message):
     
     clean_name = target_name.replace("<", "&lt;").replace(">", "&gt;")
     target_mention = f'<a href="tg://user?id={target_user_id}">{clean_name}</a>'
-    await message.
-    reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов.", parse_mode="HTML")
+    await message.reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов.", parse_mode="HTML")
 
 @dp.message(F.text.lower().startswith(("п ", "передать ")))
 async def process_transfer(message: Message):
@@ -472,8 +469,7 @@ async def cmd_spin_go(message: Message):
 
     if passed_time < 10:
         remaining = int(10 - passed_time)
-        await message.reply(f"⏳ Подождите еще <b>{remaining}</b> сек.
-    перед запуском!", parse_mode="HTML")
+        await message.reply(f"⏳ Подождите еще <b>{remaining}</b> сек. перед запуском!", parse_mode="HTML")
         return
 
     bets = game["bets"]
@@ -593,7 +589,7 @@ async def cmd_spin_go(message: Message):
 
             if is_number_bet and int(target) == number:
                 multiplier = 36
-    elif "-" in target:
+            elif "-" in target:
                 try:
                     start_str, end_str = target.split("-")
                     start, end = int(start_str), int(end_str)
@@ -702,7 +698,7 @@ async def process_roulette_bet(message: Message):
     if chat_id not in active_games:
         active_games[chat_id] = {
             "start_time": current_time,
-    "bets": []
+            "bets": []
         }
 
     for b in parsed_bets:
@@ -731,7 +727,7 @@ async def main():
     await init_db()
     await start_web_server()
     
-    # 🛠️ ИСПРАВЛЕНИЕ ОШИБКИ КОНФЛИКТА: принудительно удаляем вебхук перед запуском поллинга
+    # Принудительно удаляем вебхук перед запуском поллинга
     await bot.delete_webhook(drop_pending_updates=True)
     
     await dp.start_polling(bot)
