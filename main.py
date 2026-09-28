@@ -12,7 +12,7 @@ from aiogram.filters import Command
 BOT_TOKEN = "8962785716:AAH9h4b5A65hPGS3Qbsd0TXOU90rLIj4kzE"
 ADMIN_ID = 7939255638
 
-REQUIRED_CHANNELS = ["@craxkspot", "@noksyaa"]
+REQUIRED_CHANNELS = ["@craxkspot"]
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -51,9 +51,8 @@ async def check_subscription(user_id: int) -> bool:
 
 async def send_sub_request(message: Message):
     await message.reply(
-        "❌ <b>Чтобы пользоваться ботом, необходимо подписаться на наши каналы!</b>\n\n"
-        "👉 t.me/craxkspot\n"
-        "👉 t.me/noksyaa\n\n"
+        "❌ <b>Чтобы пользоваться ботом, необходимо подписаться на наш канал!</b>\n\n"
+        "👉 t.me/craxkspot\n\n"
         "После подписки ты сможешь делать ставки и использовать все команды.",
         parse_mode="HTML"
     )
@@ -76,27 +75,33 @@ async def init_db():
                 user_id BIGINT PRIMARY KEY,
                 username TEXT,
                 balance BIGINT DEFAULT 2000,
-                last_bonus BIGINT DEFAULT 0
+                last_bonus BIGINT DEFAULT 0,
+                loan_amount BIGINT DEFAULT 0,
+                loan_games_left INT DEFAULT 0,
+                last_loan_time BIGINT DEFAULT 0
             )
         """)
 
 async def get_user(user_id: int, username: str = None):
     async with db_pool.acquire() as db:
-        row = await db.fetchrow("SELECT balance, last_bonus FROM users WHERE user_id = $1", user_id)
+        row = await db.fetchrow("SELECT balance, last_bonus, loan_amount, loan_games_left, last_loan_time FROM users WHERE user_id = $1", user_id)
         if row is None:
             uname = username.lower() if username else "unknown"
             await db.execute(
-                "INSERT INTO users (user_id, username, balance, last_bonus) VALUES ($1, $2, 2000, 0) ON CONFLICT (user_id) DO NOTHING", 
+                "INSERT INTO users (user_id, username, balance, last_bonus, loan_amount, loan_games_left, last_loan_time) VALUES ($1, $2, 2000, 0, 0, 0, 0) ON CONFLICT (user_id) DO NOTHING", 
                 user_id, uname
             )
-            return 2000, 0
+            return 2000, 0, 0, 0, 0
         
         if username:
             await db.execute("UPDATE users SET username = $1 WHERE user_id = $2", username.lower(), user_id)
             
         balance = row["balance"] if row["balance"] is not None else 2000
         last_bonus = row["last_bonus"] if row["last_bonus"] is not None else 0
-        return balance, last_bonus
+        loan_amount = row["loan_amount"] if row["loan_amount"] is not None else 0
+        loan_games_left = row["loan_games_left"] if row["loan_games_left"] is not None else 0
+        last_loan_time = row["last_loan_time"] if row["last_loan_time"] is not None else 0
+        return balance, last_bonus, loan_amount, loan_games_left, last_loan_time
 
 async def get_user_by_username(username: str):
     username_clean = username.lstrip("@").lower()
@@ -113,6 +118,22 @@ async def update_balance(user_id: int, new_balance: int):
 async def update_bonus_time(user_id: int, current_time: int):
     async with db_pool.acquire() as db:
         await db.execute("UPDATE users SET last_bonus = $1 WHERE user_id = $2", current_time, user_id)
+
+async def set_user_loan(user_id: int, loan_amount: int, games_left: int, loan_time: int):
+    async with db_pool.acquire() as db:
+        await db.execute(
+            "UPDATE users SET loan_amount = $1, loan_games_left = $2, last_loan_time = $3 WHERE user_id = $4",
+            loan_amount, games_left, loan_time, user_id
+        )
+
+async def decrement_loan_games(user_id: int):
+    async with db_pool.acquire() as db:
+        row = await db.fetchrow("SELECT loan_amount, loan_games_left FROM users WHERE user_id = $1", user_id)
+        if row and row["loan_amount"] > 0:
+            games_left = row["loan_games_left"] - 1
+            await db.execute("UPDATE users SET loan_games_left = $1 WHERE user_id = $2", games_left, user_id)
+            return games_left
+        return 0
 
 def get_commands_keyboard():
     return InlineKeyboardMarkup(
@@ -137,8 +158,10 @@ async def cmd_start(message: Message):
 async def process_show_commands(callback: CallbackQuery):
     commands_text = (
         "📌 <b>Команды бота:</b>\n"
-        "• <code>баланс</code> или <code>б</code> — узнать свой баланс\n"
+        "• <code>баланс</code> или <code>б</code> — узнать свой баланс и статус долга\n"
         "• <code>бонус</code> — забрать ежедневный бонус\n"
+        "• <code>микрозайм &lt;сумма&gt;</code> (или <code>мз</code>) — взять микрозайм до 35 000 (кд 2 часа, дается 5 игр на возврат)\n"
+        "• <code>вернуть займ</code> (или <code>погасить</code>) — вернуть долг микрозайма\n"
         "• <code>п @username &lt;сумма&gt;</code> — перевести деньги\n"
         "• <code>отмена</code> — отменить свои несыгравшие ставки\n"
         "• <code>го</code> — запустить рулетку\n"
@@ -160,11 +183,15 @@ async def cmd_balance(message: Message):
         await send_sub_request(message)
         return
 
-    balance, _ = await get_user(message.from_user.id, message.from_user.username)
+    balance, _, loan_amount, loan_games_left, _ = await get_user(message.from_user.id, message.from_user.username)
     name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
     mention = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
 
-    await message.reply(f"👤 {mention}, твой баланс: <b>{balance}</b> ноксябаксов.", parse_mode="HTML")
+    loan_info = ""
+    if loan_amount > 0:
+        loan_info = f"\n⚠️ <b>Микрозайм:</b> {loan_amount} ноксябаксов (осталось игр на возврат: <b>{loan_games_left}</b>)"
+
+    await message.reply(f"👤 {mention}, твой баланс: <b>{balance}</b> ноксябаксов.{loan_info}", parse_mode="HTML")
 
 @dp.message(F.text.lower().in_({"бонус", "/bonus"}))
 async def cmd_bonus(message: Message):
@@ -174,7 +201,7 @@ async def cmd_bonus(message: Message):
         await send_sub_request(message)
         return
 
-    balance, last_bonus = await get_user(user_id, message.from_user.username)
+    balance, last_bonus, _, _, _ = await get_user(user_id, message.from_user.username)
     current_time = int(time.time())
     
     cooldown = 86400
@@ -191,109 +218,85 @@ async def cmd_bonus(message: Message):
         await update_bonus_time(user_id, current_time)
         await message.reply("🎁 Ты получил ежедневный бонус: <b>+5000</b> ноксябаксов!", parse_mode="HTML")
 
-@dp.message(F.text.lower().startswith("читы "))
-async def cmd_admin_cheat(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
+# ================= МИКРОЗАЙМЫ =================
 
-    text = message.text.strip().split()
-    if len(text) == 2 and text[1].isdigit():
-        amount = int(text[1])
-        user_id = message.from_user.id
-        balance, _ = await get_user(user_id, message.from_user.username)
-        new_balance = balance + amount
-        await update_balance(user_id, new_balance)
-        await message.reply(f"👑 <b>Админ-выдача:</b> Выдано <b>+{amount}</b> ноксябаксов!", parse_mode="HTML")
-
-@dp.message(F.text.lower().startswith(("забрать ", "списать ")))
-async def cmd_admin_take(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    parts = message.text.strip().split()
-    target_user_id = None
-    amount = 0
-    target_name = "Пользователь"
-
-    if message.reply_to_message and not message.reply_to_message.from_user.is_bot:
-        if len(parts) == 2 and parts[1].isdigit():
-            target_user_id = message.reply_to_message.from_user.id
-            amount = int(parts[1])
-            target_name = message.reply_to_message.from_user.first_name
-    elif len(parts) == 3 and parts[2].isdigit():
-        target_username = parts[1]
-        amount = int(parts[2])
-        target_user_id, _ = await get_user_by_username(target_username)
-        if not target_user_id:
-            await message.reply("❌ Пользователь не найден!", parse_mode="HTML")
-            return
-        target_name = target_username
-
-    if not target_user_id or amount <= 0:
-        await message.reply("❌ Ошибка формата списания.", parse_mode="HTML")
-        return
-
-    balance, _ = await get_user(target_user_id)
-    new_balance = max(0, balance - amount)
-    await update_balance(target_user_id, new_balance)
-    
-    clean_name = target_name.replace("<", "&lt;").replace(">", "&gt;")
-    target_mention = f'<a href="tg://user?id={target_user_id}">{clean_name}</a>'
-    await message.reply(f"👑 <b>Админ-списание:</b> У {target_mention} списано <b>{amount}</b> ноксябаксов.", parse_mode="HTML")
-
-@dp.message(F.text.lower().startswith(("п ", "передать ")))
-async def process_transfer(message: Message):
-    if not await check_subscription(message.from_user.id):
+@dp.message(F.text.lower().startswith(("микрозайм ", "мз ")))
+async def cmd_microloan(message: Message):
+    user_id = message.from_user.id
+    if not await check_subscription(user_id):
         await send_sub_request(message)
         return
 
     parts = message.text.strip().split()
-    sender_id = message.from_user.id
-    recipient_id = None
-    recipient_name = None
-    amount = 0
-
-    if message.reply_to_message and not message.reply_to_message.from_user.is_bot:
-        if len(parts) == 2 and parts[1].isdigit():
-            recipient_id = message.reply_to_message.from_user.id
-            recipient_name = message.reply_to_message.from_user.first_name
-            amount = int(parts[1])
-    elif len(parts) == 3 and parts[2].isdigit():
-        recipient_username_input = parts[1]
-        amount = int(parts[2])
-        recipient_id, _ = await get_user_by_username(recipient_username_input)
-
-        if not recipient_id:
-            await message.reply("❌ Пользователь не найден!", parse_mode="HTML")
-            return
-        
-        async with db_pool.acquire() as db:
-            row = await db.fetchrow("SELECT username FROM users WHERE user_id = $1", recipient_id)
-            recipient_name = row["username"] if row and row["username"] else recipient_username_input
-
-    if not recipient_id or amount <= 0:
-        await message.reply("❌ Неверный формат перевода!", parse_mode="HTML")
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.reply("❌ Неверный формат. Используй: <code>микрозайм &lt;сумма&gt;</code> (максимум 35 000).", parse_mode="HTML")
         return
 
-    if sender_id == recipient_id:
-        await message.reply("Нельзя переводить деньги самому себе!", parse_mode="HTML")
+    amount = int(parts[1])
+    if amount <= 0 or amount > 35000:
+        await message.reply("❌ Сумма микрозайма должна быть от 1 до <b>35 000</b> ноксябаксов.", parse_mode="HTML")
         return
 
-    sender_balance, _ = await get_user(sender_id, message.from_user.username)
+    balance, _, current_loan, _, last_loan_time = await get_user(user_id, message.from_user.username)
 
-    if amount > sender_balance:
-        await message.reply("У тебя недостаточно ноксябаксов!", parse_mode="HTML")
+    if current_loan > 0:
+        await message.reply(f"❌ У тебя уже есть активный микрозайм в размере <b>{current_loan}</b> ноксябаксов! Верни его сначала.", parse_mode="HTML")
         return
 
-    recipient_balance, _ = await get_user(recipient_id)
+    current_time = int(time.time())
+    loan_cooldown = 7200  # 2 часа
+    passed_time = current_time - last_loan_time
 
-    await update_balance(sender_id, sender_balance - amount)
-    await update_balance(recipient_id, recipient_balance + amount)
+    if passed_time < loan_cooldown:
+        remaining = loan_cooldown - passed_time
+        hours = remaining // 3600
+        minutes = (remaining % 3600) // 60
+        await message.reply(f"⏳ Новый микрозайм будет доступен через <b>{hours}ч {minutes}мин</b>.", parse_mode="HTML")
+        return
 
-    clean_rec_name = str(recipient_name or "Пользователь").replace("<", "&lt;").replace(">", "&gt;")
-    rec_mention = f'<a href="tg://user?id={recipient_id}">{clean_rec_name}</a>'
-    
-    await message.reply(f"💸 Ты успешно перевел <b>{amount}</b> ноксябаксов {rec_mention}!", parse_mode="HTML")
+    await update_balance(user_id, balance + amount)
+    await set_user_loan(user_id, amount, 5, current_time)
+
+    await message.reply(
+        f"💳 Ты успешно взял микрозайм на сумму <b>{amount}</b> ноксябаксов.\n"
+        f"⚠️ У тебя есть ровно <b>5 игр</b>, чтобы вернуть долг. Если не успеешь, баланс сгорит до нуля!",
+        parse_mode="HTML"
+    )
+
+@dp.message(F.text.lower().in_({"вернуть займ", "погасить", "вернуть долг"}))
+async def cmd_return_loan(message: Message):
+    user_id = message.from_user.id
+    if not await check_subscription(user_id):
+        await send_sub_request(message)
+        return
+
+    balance, _, loan_amount, loan_games_left, _ = await get_user(user_id, message.from_user.username)
+
+    if loan_amount <= 0:
+        await message.reply("❌ У тебя нет активных микрозаймов.", parse_mode="HTML")
+        return
+
+    if balance < loan_amount:
+        await message.reply(f"❌ Недостаточно средств для погашения! Нужно <b>{loan_amount}</b> ноксябаксов, а у тебя на балансе <b>{balance}</b>.", parse_mode="HTML")
+        return
+
+    await update_balance(user_id, balance - loan_amount)
+    await set_user_loan(user_id, 0, 0, int(time.time()))
+
+    await message.reply(f"✅ Ты успешно вернул микрозайм в размере <b>{loan_amount}</b> ноксябаксов!", parse_mode="HTML")
+
+async def check_and_apply_loan_penalty(user_id: int, message: Message) -> bool:
+    balance, _, loan_amount, loan_games_left, _ = await get_user(user_id)
+    if loan_amount <= 0:
+        return True
+
+    new_games_left = await decrement_loan_games(user_id)
+    if new_games_left < 0:
+        await update_balance(user_id, 0)
+        await set_user_loan(user_id, 0, 0, int(time.time()))
+        await message.reply(f"🚨 Время вышло! Ты не вернул микрозайм за 5 игр. Твой баланс принудительно обнулен до <b>0</b> ноксябаксов!", parse_mode="HTML")
+        return False
+    return True
 
 # ================= БЛЕКДЖЕК =================
 
@@ -331,6 +334,9 @@ async def cmd_blackjack(message: Message):
         await send_sub_request(message)
         return
 
+    if not await check_and_apply_loan_penalty(user_id, message):
+        return
+
     if user_id in active_bj_games:
         await message.reply("У тебя уже есть активная игра в блекджек! Закончи её.", parse_mode="HTML")
         return
@@ -339,7 +345,7 @@ async def cmd_blackjack(message: Message):
     if len(text) != 2:
         return
 
-    balance, _ = await get_user(user_id, message.from_user.username)
+    balance, _, _, _, _ = await get_user(user_id, message.from_user.username)
     
     if text[1] == "вабанк":
         bet = balance
@@ -365,7 +371,7 @@ async def cmd_blackjack(message: Message):
     if player_val == 21:
         dealer_val = calc_hand(dealer_hand)
         if dealer_val == 21:
-            await update_balance(user_id, balance) # Ничья, возврат
+            await update_balance(user_id, balance) 
             result_txt = (
                 f"🃏 <b>Блекджек</b> | Ставка: {bet}\n\n"
                 f"Твои карты: {hand_str(player_hand)} (21)\n"
@@ -373,7 +379,7 @@ async def cmd_blackjack(message: Message):
                 f"🤝 <b>Ничья!</b> У обоих Блекджек. Возврат ставки."
             )
         else:
-            win_amount = int(bet * 2.5) # Блекджек платит 3:2
+            win_amount = int(bet * 2.5) 
             await update_balance(user_id, (balance - bet) + win_amount)
             result_txt = (
                 f"🃏 <b>Блекджек</b> | Ставка: {bet}\n\n"
@@ -392,8 +398,8 @@ async def cmd_blackjack(message: Message):
     }
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🃏 Ещё", callback_data="bj_hit"),
-         InlineKeyboardButton(text="🛑 Хватит", callback_data="bj_stand")]
+        [InlineKeyboardButton(text="🃏 Ещё", callback_data=f"bj_hit_{user_id}"),
+         InlineKeyboardButton(text="🛑 Хватит", callback_data=f"bj_stand_{user_id}")]
     ])
 
     await message.reply(
@@ -405,9 +411,15 @@ async def cmd_blackjack(message: Message):
         parse_mode="HTML"
     )
 
-@dp.callback_query(F.data == "bj_hit")
+@dp.callback_query(F.data.startswith("bj_hit_"))
 async def process_bj_hit(callback: CallbackQuery):
     user_id = callback.from_user.id
+    target_user_id = int(callback.data.split("_")[2])
+
+    if user_id != target_user_id:
+        await callback.answer("❌ Это не твоя игра в блекджек!", show_alert=True)
+        return
+
     if user_id not in active_bj_games:
         await callback.answer("Игра не найдена или уже завершена.", show_alert=True)
         return
@@ -428,8 +440,8 @@ async def process_bj_hit(callback: CallbackQuery):
         )
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🃏 Ещё", callback_data="bj_hit"),
-             InlineKeyboardButton(text="🛑 Хватит", callback_data="bj_stand")]
+            [InlineKeyboardButton(text="🃏 Ещё", callback_data=f"bj_hit_{user_id}"),
+             InlineKeyboardButton(text="🛑 Хватит", callback_data=f"bj_stand_{user_id}")]
         ])
         await callback.message.edit_text(
             f"🃏 <b>Блекджек</b> | Ставка: {game['bet']}\n\n"
@@ -441,9 +453,15 @@ async def process_bj_hit(callback: CallbackQuery):
         )
     await callback.answer()
 
-@dp.callback_query(F.data == "bj_stand")
+@dp.callback_query(F.data.startswith("bj_stand_"))
 async def process_bj_stand(callback: CallbackQuery):
     user_id = callback.from_user.id
+    target_user_id = int(callback.data.split("_")[2])
+
+    if user_id != target_user_id:
+        await callback.answer("❌ Это не твоя игра в блекджек!", show_alert=True)
+        return
+
     if user_id not in active_bj_games:
         await callback.answer("Игра не найдена или уже завершена.", show_alert=True)
         return
@@ -517,8 +535,12 @@ async def cmd_cancel_bets(message: Message):
 
 @dp.message(F.text.lower() == "го")
 async def cmd_spin_go(message: Message):
-    if not await check_subscription(message.from_user.id):
+    user_id = message.from_user.id
+    if not await check_subscription(user_id):
         await send_sub_request(message)
+        return
+
+    if not await check_and_apply_loan_penalty(user_id, message):
         return
 
     chat_id = message.chat.id
@@ -568,9 +590,9 @@ async def cmd_spin_go(message: Message):
             }
         user_bets_map[uid]["bets"].append(b)
 
-    for user_id, u_data in user_bets_map.items():
+    for uid, u_data in user_bets_map.items():
         user_name = u_data["name"]
-        user_mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+        user_mention = f'<a href="tg://user?id={uid}">{user_name}</a>'
         
         results_text += f"👤 <b>{user_mention}</b>:\n"
 
@@ -620,9 +642,9 @@ async def cmd_spin_go(message: Message):
         total_user_bets = sum(b["bet"] for b in u_data["bets"])
         net_round_change = total_payout_to_add - total_user_bets
 
-        balance, _ = await get_user(user_id)
+        balance, _ = await get_user(uid)
         final_user_balance = max(0, balance + total_payout_to_add)
-        await update_balance(user_id, final_user_balance)
+        await update_balance(uid, final_user_balance)
         
         sign_str = "+" if net_round_change > 0 else ""
         results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> ноксябаксов\n\n"
@@ -640,7 +662,7 @@ async def process_roulette_bet(message: Message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    balance, _ = await get_user(user_id, message.from_user.username)
+    balance, _, _, _, _ = await get_user(user_id, message.from_user.username)
     available_balance = balance
 
     parsed_bets = []
