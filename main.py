@@ -81,6 +81,10 @@ async def init_db():
                 last_loan_time BIGINT DEFAULT 0
             )
         """)
+        # Автоматическое добавление колонок, если таблица уже существовала ранее
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS loan_amount BIGINT DEFAULT 0;")
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS loan_games_left INT DEFAULT 0;")
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_loan_time BIGINT DEFAULT 0;")
 
 async def get_user(user_id: int, username: str = None):
     async with db_pool.acquire() as db:
@@ -102,14 +106,6 @@ async def get_user(user_id: int, username: str = None):
         loan_games_left = row["loan_games_left"] if row["loan_games_left"] is not None else 0
         last_loan_time = row["last_loan_time"] if row["last_loan_time"] is not None else 0
         return balance, last_bonus, loan_amount, loan_games_left, last_loan_time
-
-async def get_user_by_username(username: str):
-    username_clean = username.lstrip("@").lower()
-    async with db_pool.acquire() as db:
-        row = await db.fetchrow("SELECT user_id, balance FROM users WHERE LOWER(username) = $1", username_clean)
-        if row:
-            return row["user_id"], row["balance"]
-        return None, None
 
 async def update_balance(user_id: int, new_balance: int):
     async with db_pool.acquire() as db:
