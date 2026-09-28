@@ -220,7 +220,7 @@ async def cmd_bonus(message: Message):
         await update_bonus_time(user_id, current_time)
         await message.reply("🎁 Ты получил ежедневный бонус: <b>+5000</b> ноксябаксов!", parse_mode="HTML")
 
-# ================= ЧИТЫ =================
+# ================= ЧИТЫ И АДМИН-КОМАНДЫ =================
 
 @dp.message(F.text.lower().startswith(("читы", "чит ")))
 async def cmd_cheats(message: Message):
@@ -238,6 +238,56 @@ async def cmd_cheats(message: Message):
     await update_balance(message.from_user.id, new_balance)
     await message.reply(f"👑 Чит активирован! Начислено <b>+{amount}</b> ноксябаксов. Баланс: <b>{new_balance}</b>", parse_mode="HTML")
 
+@dp.message(F.text.lower() == "hesoyam")
+async def cmd_hesoyam(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    balance, _, _, _, _ = await get_user(message.from_user.id, message.from_user.username)
+    new_balance = balance + 250000
+    await set_user_loan(message.from_user.id, 0, 0, int(time.time()))
+    await update_balance(message.from_user.id, new_balance)
+    
+    await message.reply(
+        "💚 <b>HESOYAM активирован!</b>\n"
+        "➕ Начислено <b>250 000</b> ноксябаксов.\n"
+        "🛡 Здоровье и броня восстановлены, долги аннулированы!",
+        parse_mode="HTML"
+    )
+
+@dp.message(F.text.lower().startswith(("сброскд", "скд")))
+async def cmd_reset_cooldown(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    target_user_id = None
+    target_username = "себе"
+
+    parts = message.text.strip().split()
+
+    if message.reply_to_message:
+        target_user_id = message.reply_to_message.from_user.id
+        target_username = f"@{message.reply_to_message.from_user.username}" if message.reply_to_message.from_user.username else f"ID: {target_user_id}"
+        await get_user(target_user_id, message.reply_to_message.from_user.username)
+    elif len(parts) >= 2:
+        username_arg = parts[1].lstrip("@")
+        target_row = await get_user_by_username(username_arg)
+        if target_row:
+            target_user_id = target_row["user_id"]
+            target_username = f"@{username_arg}"
+        else:
+            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
+            return
+    else:
+        target_user_id = message.from_user.id
+
+    # Сбрасываем кд бонуса (ставим 0) и кд микрозайма (тоже 0)
+    await update_bonus_time(target_user_id, 0)
+    async with db_pool.acquire() as db:
+        await db.execute("UPDATE users SET last_loan_time = 0 WHERE user_id = $1", target_user_id)
+
+    await message.reply(f"⚡ Кулдауны (бонус и микрозайм) успешно сброшены для пользователя <b>{target_username}</b>!", parse_mode="HTML")
+
 # ================= ПЕРЕВОД ДЕНЕГ =================
 
 @dp.message(F.text.lower().startswith(("п ", "перевод ")))
@@ -254,14 +304,11 @@ async def cmd_pay(message: Message):
     target_user_id = None
     amount = 0
 
-    # Проверяем перевод через reply (ответ на сообщение получателя)
     if message.reply_to_message and len(parts) == 2 and parts[1].isdigit():
         target_user_id = message.reply_to_message.from_user.id
         amount = int(parts[1])
-        # Регистрируем получателя в базе на всякий случай
         await get_user(target_user_id, message.reply_to_message.from_user.username)
 
-    # Проверяем перевод по юзернейму: п @username сумма
     elif len(parts) == 3 and parts[2].isdigit():
         target_username = parts[1].lstrip("@")
         amount = int(parts[2])
@@ -269,7 +316,7 @@ async def cmd_pay(message: Message):
         if target_row:
             target_user_id = target_row["user_id"]
         else:
-            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота (он должен хотя бы раз написать боту).", parse_mode="HTML")
+            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
             return
     else:
         await message.reply("❌ Неверный формат. Используй: <code>п @username &lt;сумму&gt;</code> или ответь на сообщение командой <code>п &lt;сумму&gt;</code>", parse_mode="HTML")
@@ -733,9 +780,8 @@ async def process_roulette_bet(message: Message):
     if not message.text:
         return
 
-    # Игнорируем команды, которые обрабатываются другими хендлерами
     text_lower = message.text.lower()
-    if text_lower.startswith(("/","баланс","б ","бонус","читы","чит","микрозайм","мз","вернуть","погасить","п ","перевод","бж","блекджек","го","отмена","отменить")) or text_lower in {"баланс", "б", "бонус", "го", "отмена", "отменить"}:
+    if text_lower.startswith(("/","баланс","б ","бонус","читы","чит","hesoyam","сброскд","скд","микрозайм","мз","вернуть","погасить","п ","перевод","бж","блекджек","го","отмена","отменить")) or text_lower in {"баланс", "б", "бонус", "hesoyam", "сброскд", "скд", "го", "отмена", "отменить"}:
         return
 
     text_to_parse = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк")
