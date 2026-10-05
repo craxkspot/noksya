@@ -2,6 +2,7 @@ import asyncio
 import random
 import time
 import os
+import re
 from aiohttp import web
 
 import asyncpg
@@ -78,24 +79,30 @@ async def init_db():
                 last_bonus BIGINT DEFAULT 0,
                 loan_amount BIGINT DEFAULT 0,
                 loan_games_left INT DEFAULT 0,
-                last_loan_time BIGINT DEFAULT 0
+                last_loan_time BIGINT DEFAULT 0,
+                used_hesoyam BOOLEAN DEFAULT FALSE
             )
         """)
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS loan_amount BIGINT DEFAULT 0;")
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS loan_games_left INT DEFAULT 0;")
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_loan_time BIGINT DEFAULT 0;")
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS used_hesoyam BOOLEAN DEFAULT FALSE;")
 
 async def get_user(user_id: int, username: str = None):
     async with db_pool.acquire() as db:
-        row = await db.fetchrow("SELECT balance, last_bonus, loan_amount, loan_games_left, last_loan_time FROM users WHERE user_id = $1", user_id)
+        row = await db.fetchrow(
+            "SELECT balance, last_bonus, loan_amount, loan_games_left, last_loan_time, used_hesoyam FROM users WHERE user_id = $1", 
+            user_id
+        )
         uname = username.lower().lstrip("@") if username else "unknown"
         
         if row is None:
             await db.execute(
-                "INSERT INTO users (user_id, username, balance, last_bonus, loan_amount, loan_games_left, last_loan_time) VALUES ($1, $2, 2000, 0, 0, 0, 0) ON CONFLICT (user_id) DO NOTHING", 
+                "INSERT INTO users (user_id, username, balance, last_bonus, loan_amount, loan_games_left, last_loan_time, used_hesoyam) "
+                "VALUES ($1, $2, 2000, 0, 0, 0, 0, FALSE) ON CONFLICT (user_id) DO NOTHING", 
                 user_id, uname
             )
-            return 2000, 0, 0, 0, 0
+            return 2000, 0, 0, 0, 0, False
         
         if username:
             await db.execute("UPDATE users SET username = $1 WHERE user_id = $2", uname, user_id)
@@ -105,12 +112,13 @@ async def get_user(user_id: int, username: str = None):
         loan_amount = row["loan_amount"] if row["loan_amount"] is not None else 0
         loan_games_left = row["loan_games_left"] if row["loan_games_left"] is not None else 0
         last_loan_time = row["last_loan_time"] if row["last_loan_time"] is not None else 0
-        return balance, last_bonus, loan_amount, loan_games_left, last_loan_time
+        used_hesoyam = row["used_hesoyam"] if row["used_hesoyam"] is not None else False
+        return balance, last_bonus, loan_amount, loan_games_left, last_loan_time, used_hesoyam
 
 async def get_user_by_username(username: str):
     clean_username = username.lower().lstrip("@")
     async with db_pool.acquire() as db:
-        row = await db.fetchrow("SELECT user_id, balance FROM users WHERE username = $1", clean_username)
+        row = await db.fetchrow("SELECT user_id, balance, username FROM users WHERE username = $1", clean_username)
         return row
 
 async def update_balance(user_id: int, new_balance: int):
@@ -167,7 +175,8 @@ async def process_show_commands(callback: CallbackQuery):
         "• <code>п @username &lt;сумма&gt;</code> (или ответом на сообщение) — перевести деньги\n"
         "• <code>отмена</code> — отменить свои несыгравшие ставки\n"
         "• <code>го</code> — запустить рулетку\n"
-        "• <code>бж &lt;сумма&gt;</code> (или <code>блекджек</code>) — сыграть в блекджек\n\n"
+        "• <code>бж &lt;сумма&gt;</code> (или <code>блекджек</code>) — сыграть в блекджек\n"
+        "• <code>hesoyam</code> — секретный одноразовый бонус!\n\n"
         "🎰 <b>Варианты ставок в рулетке:</b>\n"
         "• На цвет: <code>к</code> (красное), <code>ч</code> (черное)\n"
         "• На четность: <code>чет</code>, <code>нечет</code>\n"
@@ -185,15 +194,15 @@ async def cmd_balance(message: Message):
         await send_sub_request(message)
         return
 
-    balance, _, loan_amount, loan_games_left, _ = await get_user(message.from_user.id, message.from_user.username)
+    balance, _, loan_amount, loan_games_left, _, _ = await get_user(message.from_user.id, message.from_user.username)
     name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
     mention = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
 
     loan_info = ""
     if loan_amount > 0:
-        loan_info = f"\n⚠️ <b>Микрозайм:</b> {loan_amount} ноксябаксов (осталось игр на возврат: <b>{loan_games_left}</b>)"
+        loan_info = f"\n⚠️ <b>Микрозайм:</b> {loan_amount} фелициевых долларов (осталось игр на возврат: <b>{loan_games_left}</b>)"
 
-    await message.reply(f"👤 {mention}, твой баланс: <b>{balance}</b> ноксябаксов.{loan_info}", parse_mode="HTML")
+    await message.reply(f"👤 {mention}, твой баланс: <b>{balance}</b> фелициевых долларов.{loan_info}", parse_mode="HTML")
 
 @dp.message(F.text.lower().in_({"бонус", "/bonus"}))
 async def cmd_bonus(message: Message):
@@ -203,7 +212,7 @@ async def cmd_bonus(message: Message):
         await send_sub_request(message)
         return
 
-    balance, last_bonus, _, _, _ = await get_user(user_id, message.from_user.username)
+    balance, last_bonus, _, _, _, _ = await get_user(user_id, message.from_user.username)
     current_time = int(time.time())
     
     cooldown = 86400
@@ -218,7 +227,7 @@ async def cmd_bonus(message: Message):
         new_balance = balance + 5000
         await update_balance(user_id, new_balance)
         await update_bonus_time(user_id, current_time)
-        await message.reply("🎁 Ты получил ежедневный бонус: <b>+5000</b> ноксябаксов!", parse_mode="HTML")
+        await message.reply("🎁 Ты получил ежедневный бонус: <b>+5000</b> фелициевых долларов!", parse_mode="HTML")
 
 # ================= ЧИТЫ И АДМИН-КОМАНДЫ =================
 
@@ -227,31 +236,91 @@ async def cmd_cheats(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    parts = message.text.strip().split()
+    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
+    parts = clean_text.split()
     if len(parts) != 2 or not parts[1].isdigit():
         await message.reply("❌ Формат: <code>читы &lt;сумма&gt;</code>", parse_mode="HTML")
         return
 
     amount = int(parts[1])
-    balance, _, _, _, _ = await get_user(message.from_user.id, message.from_user.username)
+    balance, _, _, _, _, _ = await get_user(message.from_user.id, message.from_user.username)
     new_balance = balance + amount
     await update_balance(message.from_user.id, new_balance)
-    await message.reply(f"👑 Чит активирован! Начислено <b>+{amount}</b> ноксябаксов. Баланс: <b>{new_balance}</b>", parse_mode="HTML")
+    await message.reply(f"👑 Чит активирован! Начислено <b>+{amount}</b> фелициевых долларов. Баланс: <b>{new_balance}</b>", parse_mode="HTML")
 
-@dp.message(F.text.lower() == "hesoyam")
-async def cmd_hesoyam(message: Message):
+@dp.message(F.text.lower().startswith("забрать"))
+async def cmd_take_money(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    balance, _, _, _, _ = await get_user(message.from_user.id, message.from_user.username)
+    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
+    parts = clean_text.split()
+    
+    target_user_id = None
+    target_name = ""
+    amount = 0
+
+    if message.reply_to_message and len(parts) == 2 and parts[1].isdigit():
+        target_user_id = message.reply_to_message.from_user.id
+        amount = int(parts[1])
+        t_user = message.reply_to_message.from_user
+        target_name = f"@{t_user.username}" if t_user.username else f'<a href="tg://user?id={target_user_id}">{t_user.first_name}</a>'
+        await get_user(target_user_id, t_user.username)
+    elif len(parts) == 3 and parts[2].isdigit():
+        username_arg = parts[1].lstrip("@")
+        amount = int(parts[2])
+        target_row = await get_user_by_username(username_arg)
+        if target_row:
+            target_user_id = target_row["user_id"]
+            target_name = f"@{username_arg}"
+        else:
+            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
+            return
+    else:
+        await message.reply("❌ Формат: <code>забрать @username &lt;сумма&gt;</code> или ответом на сообщение: <code>забрать &lt;сумма&gt;</code>", parse_mode="HTML")
+        return
+
+    if amount <= 0:
+        await message.reply("❌ Сумма списания должна быть больше нуля.", parse_mode="HTML")
+        return
+
+    target_balance, _, _, _, _, _ = await get_user(target_user_id)
+    new_balance = max(0, target_balance - amount)
+    taken_amount = target_balance - new_balance
+    await update_balance(target_user_id, new_balance)
+
+    await message.reply(
+        f"💸 Успешно списано <b>{taken_amount}</b> фелициевых долларов у {target_name}!\n"
+        f"Остаток на балансе: <b>{new_balance}</b>",
+        parse_mode="HTML"
+    )
+
+@dp.message(F.text.lower() == "hesoyam")
+async def cmd_hesoyam(message: Message):
+    user_id = message.from_user.id
+
+    if not await check_subscription(user_id):
+        await send_sub_request(message)
+        return
+
+    balance, _, _, _, _, used_hesoyam = await get_user(user_id, message.from_user.username)
+    
+    if used_hesoyam:
+        await message.reply("❌ Код <b>HESOYAM</b> можно активировать только <b>один раз</b> за всё время!", parse_mode="HTML")
+        return
+
     new_balance = balance + 250000
-    await set_user_loan(message.from_user.id, 0, 0, int(time.time()))
-    await update_balance(message.from_user.id, new_balance)
+    await set_user_loan(user_id, 0, 0, int(time.time()))
+    await update_balance(user_id, new_balance)
+    
+    async with db_pool.acquire() as db:
+        await db.execute("UPDATE users SET used_hesoyam = TRUE WHERE user_id = $1", user_id)
     
     await message.reply(
         "💚 <b>HESOYAM активирован!</b>\n"
-        "➕ Начислено <b>250 000</b> ноксябаксов.\n"
-        "🛡 Здоровье и броня восстановлены, долги аннулированы!",
+        "➕ Начислено <b>250 000</b> фелициевых долларов.\n"
+        "🛡 Здоровье и броня восстановлены, долги аннулированы!\n"
+        "<i>(Чит-код использован навсегда)</i>",
         parse_mode="HTML"
     )
 
@@ -281,7 +350,6 @@ async def cmd_reset_cooldown(message: Message):
     else:
         target_user_id = message.from_user.id
 
-    # Сбрасываем кд бонуса (ставим 0) и кд микрозайма (тоже 0)
     await update_bonus_time(target_user_id, 0)
     async with db_pool.acquire() as db:
         await db.execute("UPDATE users SET last_loan_time = 0 WHERE user_id = $1", target_user_id)
@@ -300,14 +368,23 @@ async def cmd_pay(message: Message):
     if not await check_and_apply_loan_penalty(sender_id, message):
         return
 
-    parts = message.text.strip().split()
+    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
+    parts = clean_text.split()
+    
     target_user_id = None
+    target_display_name = ""
     amount = 0
 
     if message.reply_to_message and len(parts) == 2 and parts[1].isdigit():
         target_user_id = message.reply_to_message.from_user.id
         amount = int(parts[1])
-        await get_user(target_user_id, message.reply_to_message.from_user.username)
+        t_user = message.reply_to_message.from_user
+        if t_user.username:
+            target_display_name = f"@{t_user.username}"
+        else:
+            clean_name = t_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
+            target_display_name = f'<a href="tg://user?id={t_user.id}">{clean_name}</a>'
+        await get_user(target_user_id, t_user.username)
 
     elif len(parts) == 3 and parts[2].isdigit():
         target_username = parts[1].lstrip("@")
@@ -315,6 +392,7 @@ async def cmd_pay(message: Message):
         target_row = await get_user_by_username(target_username)
         if target_row:
             target_user_id = target_row["user_id"]
+            target_display_name = f"@{target_username}"
         else:
             await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
             return
@@ -330,17 +408,17 @@ async def cmd_pay(message: Message):
         await message.reply("❌ Сумма перевода должна быть больше нуля.", parse_mode="HTML")
         return
 
-    sender_balance, _, _, _, _ = await get_user(sender_id, message.from_user.username)
+    sender_balance, _, _, _, _, _ = await get_user(sender_id, message.from_user.username)
     if sender_balance < amount:
-        await message.reply(f"❌ Недостаточно средств! У тебя на балансе <b>{sender_balance}</b> ноксябаксов.", parse_mode="HTML")
+        await message.reply(f"❌ Недостаточно средств! У тебя на балансе <b>{sender_balance}</b> фелициевых долларов.", parse_mode="HTML")
         return
 
-    target_balance, _, _, _, _ = await get_user(target_user_id)
+    target_balance, _, _, _, _, _ = await get_user(target_user_id)
 
     await update_balance(sender_id, sender_balance - amount)
     await update_balance(target_user_id, target_balance + amount)
 
-    await message.reply(f"✅ Ты успешно перевел <b>{amount}</b> ноксябаксов пользователю!", parse_mode="HTML")
+    await message.reply(f"✅ Ты успешно перевел <b>{amount}</b> фелициевых долларов пользователю <b>{target_display_name}</b>!", parse_mode="HTML")
 
 # ================= МИКРОЗАЙМЫ =================
 
@@ -351,20 +429,21 @@ async def cmd_microloan(message: Message):
         await send_sub_request(message)
         return
 
-    parts = message.text.strip().split()
+    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
+    parts = clean_text.split()
     if len(parts) != 2 or not parts[1].isdigit():
         await message.reply("❌ Неверный формат. Используй: <code>микрозайм &lt;сумма&gt;</code> (максимум 35 000).", parse_mode="HTML")
         return
 
     amount = int(parts[1])
     if amount <= 0 or amount > 35000:
-        await message.reply("❌ Сумма микрозайма должна быть от 1 до <b>35 000</b> ноксябаксов.", parse_mode="HTML")
+        await message.reply("❌ Сумма микрозайма должна быть от 1 до <b>35 000</b> фелициевых долларов.", parse_mode="HTML")
         return
 
-    balance, _, current_loan, _, last_loan_time = await get_user(user_id, message.from_user.username)
+    balance, _, current_loan, _, last_loan_time, _ = await get_user(user_id, message.from_user.username)
 
     if current_loan > 0:
-        await message.reply(f"❌ У тебя уже есть активный микрозайм в размере <b>{current_loan}</b> ноксябаксов! Верни его сначала.", parse_mode="HTML")
+        await message.reply(f"❌ У тебя уже есть активный микрозайм в размере <b>{current_loan}</b> фелициевых долларов! Верни его сначала.", parse_mode="HTML")
         return
 
     current_time = int(time.time())
@@ -382,8 +461,8 @@ async def cmd_microloan(message: Message):
     await set_user_loan(user_id, amount, 5, current_time)
 
     await message.reply(
-        f"💳 Ты успешно взял микрозайм на сумму <b>{amount}</b> ноксябаксов.\n"
-        f"⚠️ У тебя есть ровно <b>5 игр</b>, чтобы вернуть долг. Если не успеешь, баланс сгорит до нуля!",
+        f"💳 Ты успешно взял микрозайм на сумму <b>{amount}</b> фелициевых долларов.\n"
+        f"⚠ У тебя есть ровно <b>5 игр</b>, чтобы вернуть долг. Если не успеешь, баланс сгорит до нуля!",
         parse_mode="HTML"
     )
 
@@ -394,23 +473,23 @@ async def cmd_return_loan(message: Message):
         await send_sub_request(message)
         return
 
-    balance, _, loan_amount, loan_games_left, _ = await get_user(user_id, message.from_user.username)
+    balance, _, loan_amount, loan_games_left, _, _ = await get_user(user_id, message.from_user.username)
 
     if loan_amount <= 0:
         await message.reply("❌ У тебя нет активных микрозаймов.", parse_mode="HTML")
         return
 
     if balance < loan_amount:
-        await message.reply(f"❌ Недостаточно средств для погашения! Нужно <b>{loan_amount}</b> ноксябаксов, а у тебя на балансе <b>{balance}</b>.", parse_mode="HTML")
+        await message.reply(f"❌ Недостаточно средств для погашения! Нужно <b>{loan_amount}</b> фелициевых долларов, а у тебя на балансе <b>{balance}</b>.", parse_mode="HTML")
         return
 
     await update_balance(user_id, balance - loan_amount)
     await set_user_loan(user_id, 0, 0, int(time.time()))
 
-    await message.reply(f"✅ Ты успешно вернул микрозайм в размере <b>{loan_amount}</b> ноксябаксов!", parse_mode="HTML")
+    await message.reply(f"✅ Ты успешно вернул микрозайм в размере <b>{loan_amount}</b> фелициевых долларов!", parse_mode="HTML")
 
 async def check_and_apply_loan_penalty(user_id: int, message: Message) -> bool:
-    balance, _, loan_amount, loan_games_left, _ = await get_user(user_id)
+    balance, _, loan_amount, loan_games_left, _, _ = await get_user(user_id)
     if loan_amount <= 0:
         return True
 
@@ -418,7 +497,7 @@ async def check_and_apply_loan_penalty(user_id: int, message: Message) -> bool:
     if new_games_left < 0:
         await update_balance(user_id, 0)
         await set_user_loan(user_id, 0, 0, int(time.time()))
-        await message.reply(f"🚨 Время вышло! Ты не вернул микрозайм за 5 игр. Твой баланс принудительно обнулен до <b>0</b> ноксябаксов!", parse_mode="HTML")
+        await message.reply(f"🚨 Время вышло! Ты не вернул микрозайм за 5 игр. Твой баланс принудительно обнулен до <b>0</b> фелициевых долларов!", parse_mode="HTML")
         return False
     return True
 
@@ -438,7 +517,6 @@ def calc_hand(hand):
         if rank in ['J', 'Q', 'K']:
             value += 10
         elif rank == 'A':
-            aces += 1
             value += 11
         else:
             value += int(rank)
@@ -465,16 +543,19 @@ async def cmd_blackjack(message: Message):
         await message.reply("У тебя уже есть активная игра в блекджек! Закончи её.", parse_mode="HTML")
         return
 
-    text = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк").split()
-    if len(text) != 2:
+    text = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк")
+    text = re.sub(r'(?<=\d)\s+(?=\d)', '', text)
+    parts = text.split()
+    
+    if len(parts) != 2:
         return
 
-    balance, _, _, _, _ = await get_user(user_id, message.from_user.username)
+    balance, _, _, _, _, _ = await get_user(user_id, message.from_user.username)
     
-    if text[1] == "вабанк":
+    if parts[1] == "вабанк":
         bet = balance
-    elif text[1].isdigit():
-        bet = int(text[1])
+    elif parts[1].isdigit():
+        bet = int(parts[1])
     else:
         return
 
@@ -559,7 +640,7 @@ async def process_bj_hit(callback: CallbackQuery):
             f"🃏 <b>Блекджек</b> | Ставка: {game['bet']}\n\n"
             f"Твои карты: {hand_str(game['player_hand'])} ({player_val})\n"
             f"Карты дилера: {game['dealer_hand'][0][0]}{game['dealer_hand'][0][1]} 🎴\n\n"
-            f"💥 <b>Перебор!</b> Ты проиграл <b>{game['bet']}</b> ноксябаксов.",
+            f"💥 <b>Перебор!</b> Ты проиграл <b>{game['bet']}</b> фелициевых долларов.",
             parse_mode="HTML"
         )
     else:
@@ -603,7 +684,7 @@ async def process_bj_stand(callback: CallbackQuery):
         dealer_hand.append(deck.pop())
         dealer_val = calc_hand(dealer_hand)
 
-    balance, _, _, _, _ = await get_user(user_id)
+    balance, _, _, _, _, _ = await get_user(user_id)
     
     if dealer_val > 21:
         win_amount = bet * 2
@@ -649,13 +730,13 @@ async def cmd_cancel_bets(message: Message):
     refund_amount = sum(b["bet"] for b in user_bets)
     game["bets"] = [b for b in game["bets"] if b["user_id"] != user_id]
 
-    balance, _, _, _, _ = await get_user(user_id, message.from_user.username)
+    balance, _, _, _, _, _ = await get_user(user_id, message.from_user.username)
     await update_balance(user_id, balance + refund_amount)
 
     name = message.from_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
     mention = f'<a href="tg://user?id={user_id}">{name}</a>'
 
-    await message.reply(f"🚫 {mention}, твои ставки отменены! На баланс возвращено <b>+{refund_amount}</b> ноксябаксов.", parse_mode="HTML")
+    await message.reply(f"🚫 {mention}, твои ставки отменены! На баланс возвращено <b>+{refund_amount}</b> фелициевых долларов.", parse_mode="HTML")
 
 @dp.message(F.text.lower() == "го")
 async def cmd_spin_go(message: Message):
@@ -759,19 +840,19 @@ async def cmd_spin_go(message: Message):
                 payout = int(bet * multiplier)
                 profit = payout - bet
                 total_payout_to_add += payout
-                results_text += f"  ▫️ Ставка <code>{bet}</code> на <code>{target}</code> — ✅ Выигрыш <b>+{profit}</b> (x{round(multiplier, 2)})\n"
+                results_text += f"  ▫ Ставка <code>{bet}</code> на <code>{target}</code> — ✅ Выигрыш <b>+{profit}</b> (x{round(multiplier, 2)})\n"
             else:
                 results_text += f"  ▫️ Ставка <code>{bet}</code> на <code>{target}</code> — ❌ Проигрыш <b>-{bet}</b>\n"
 
         total_user_bets = sum(b["bet"] for b in u_data["bets"])
         net_round_change = total_payout_to_add - total_user_bets
 
-        balance, _, _, _, _ = await get_user(uid)
+        balance, _, _, _, _, _ = await get_user(uid)
         final_user_balance = max(0, balance + total_payout_to_add)
         await update_balance(uid, final_user_balance)
         
         sign_str = "+" if net_round_change > 0 else ""
-        results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> ноксябаксов\n\n"
+        results_text += f"  💰 Итог раунда: <b>{sign_str}{net_round_change}</b> фелициевых долларов\n\n"
 
     await message.bot.send_message(chat_id=chat_id, text=results_text, parse_mode="HTML")
 
@@ -781,16 +862,26 @@ async def process_roulette_bet(message: Message):
         return
 
     text_lower = message.text.lower()
-    if text_lower.startswith(("/","баланс","б ","бонус","читы","чит","hesoyam","сброскд","скд","микрозайм","мз","вернуть","погасить","п ","перевод","бж","блекджек","го","отмена","отменить")) or text_lower in {"баланс", "б", "бонус", "hesoyam", "сброскд", "скд", "го", "отмена", "отменить"}:
+    ignored_prefixes = (
+        "/", "баланс", "б ", "бонус", "читы", "чит", "забрать", "hesoyam", 
+        "сброскд", "скд", "микрозайм", "мз", "вернуть", "погасить", "п ", 
+        "перевод", "бж", "блекджек", "го", "отмена", "отменить"
+    )
+    ignored_exact = {
+        "баланс", "б", "бонус", "hesoyam", "сброскд", "скд", "го", "отмена", "отменить"
+    }
+    if text_lower.startswith(ignored_prefixes) or text_lower in ignored_exact:
         return
 
     text_to_parse = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк")
+    # Очищаем все пробелы между цифрами для поддержки формата "1 000 к", "100 000 000 ч" и т.д.
+    text_to_parse = re.sub(r'(?<=\d)\s+(?=\d)', '', text_to_parse)
     text_lines = text_to_parse.strip().split("\n")
     
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    balance, _, _, _, _ = await get_user(user_id, message.from_user.username)
+    balance, _, _, _, _, _ = await get_user(user_id, message.from_user.username)
     available_balance = balance
 
     parsed_bets = []
