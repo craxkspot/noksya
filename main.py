@@ -2,7 +2,6 @@ import asyncio
 import random
 import time
 import os
-import re
 from aiohttp import web
 
 import asyncpg
@@ -236,13 +235,17 @@ async def cmd_cheats(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
-    parts = clean_text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
+    parts = message.text.strip().split()
+    if len(parts) < 2:
         await message.reply("❌ Формат: <code>читы &lt;сумма&gt;</code>", parse_mode="HTML")
         return
 
-    amount = int(parts[1])
+    amount_str = "".join(parts[1:])
+    if not amount_str.isdigit():
+        await message.reply("❌ Неверный формат суммы.", parse_mode="HTML")
+        return
+
+    amount = int(amount_str)
     balance, _, _, _, _, _ = await get_user(message.from_user.id, message.from_user.username)
     new_balance = balance + amount
     await update_balance(message.from_user.id, new_balance)
@@ -253,35 +256,35 @@ async def cmd_take_money(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
-    parts = clean_text.split()
-    
+    parts = message.text.strip().split()
     target_user_id = None
     target_name = ""
     amount = 0
 
-    if message.reply_to_message and len(parts) == 2 and parts[1].isdigit():
-        target_user_id = message.reply_to_message.from_user.id
-        amount = int(parts[1])
-        t_user = message.reply_to_message.from_user
-        target_name = f"@{t_user.username}" if t_user.username else f'<a href="tg://user?id={target_user_id}">{t_user.first_name}</a>'
-        await get_user(target_user_id, t_user.username)
-    elif len(parts) == 3 and parts[2].isdigit():
-        username_arg = parts[1].lstrip("@")
-        amount = int(parts[2])
-        target_row = await get_user_by_username(username_arg)
-        if target_row:
-            target_user_id = target_row["user_id"]
-            target_name = f"@{username_arg}"
-        else:
-            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
-            return
-    else:
-        await message.reply("❌ Формат: <code>забрать @username &lt;сумма&gt;</code> или ответом на сообщение: <code>забрать &lt;сумма&gt;</code>", parse_mode="HTML")
-        return
+    if message.reply_to_message and len(parts) >= 2:
+        amount_str = "".join(parts[1:])
+        if amount_str.isdigit():
+            target_user_id = message.reply_to_message.from_user.id
+            amount = int(amount_str)
+            t_user = message.reply_to_message.from_user
+            target_name = f"@{t_user.username}" if t_user.username else f'<a href="tg://user?id={target_user_id}">{t_user.first_name}</a>'
+            await get_user(target_user_id, t_user.username)
 
-    if amount <= 0:
-        await message.reply("❌ Сумма списания должна быть больше нуля.", parse_mode="HTML")
+    elif len(parts) >= 3:
+        username_arg = parts[1].lstrip("@")
+        amount_str = "".join(parts[2:])
+        if amount_str.isdigit():
+            target_row = await get_user_by_username(username_arg)
+            if target_row:
+                target_user_id = target_row["user_id"]
+                target_name = f"@{username_arg}"
+                amount = int(amount_str)
+            else:
+                await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
+                return
+
+    if not target_user_id or amount <= 0:
+        await message.reply("❌ Формат: <code>забрать @username &lt;сумма&gt;</code> или ответом на сообщение: <code>забрать &lt;сумма&gt;</code>", parse_mode="HTML")
         return
 
     target_balance, _, _, _, _, _ = await get_user(target_user_id)
@@ -368,44 +371,43 @@ async def cmd_pay(message: Message):
     if not await check_and_apply_loan_penalty(sender_id, message):
         return
 
-    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
-    parts = clean_text.split()
-    
+    parts = message.text.strip().split()
     target_user_id = None
     target_display_name = ""
     amount = 0
 
-    if message.reply_to_message and len(parts) == 2 and parts[1].isdigit():
-        target_user_id = message.reply_to_message.from_user.id
-        amount = int(parts[1])
-        t_user = message.reply_to_message.from_user
-        if t_user.username:
-            target_display_name = f"@{t_user.username}"
-        else:
-            clean_name = t_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
-            target_display_name = f'<a href="tg://user?id={t_user.id}">{clean_name}</a>'
-        await get_user(target_user_id, t_user.username)
+    if message.reply_to_message and len(parts) >= 2:
+        amount_str = "".join(parts[1:])
+        if amount_str.isdigit():
+            amount = int(amount_str)
+            t_user = message.reply_to_message.from_user
+            target_user_id = t_user.id
+            if t_user.username:
+                target_display_name = f"@{t_user.username}"
+            else:
+                clean_name = t_user.first_name.replace("<", "&lt;").replace(">", "&gt;")
+                target_display_name = f'<a href="tg://user?id={t_user.id}">{clean_name}</a>'
+            await get_user(target_user_id, t_user.username)
 
-    elif len(parts) == 3 and parts[2].isdigit():
+    elif len(parts) >= 3:
         target_username = parts[1].lstrip("@")
-        amount = int(parts[2])
-        target_row = await get_user_by_username(target_username)
-        if target_row:
-            target_user_id = target_row["user_id"]
-            target_display_name = f"@{target_username}"
-        else:
-            await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
-            return
-    else:
+        amount_str = "".join(parts[2:])
+        if amount_str.isdigit():
+            amount = int(amount_str)
+            target_row = await get_user_by_username(target_username)
+            if target_row:
+                target_user_id = target_row["user_id"]
+                target_display_name = f"@{target_username}"
+            else:
+                await message.reply("❌ Пользователь с таким юзернеймом не найден в базе бота.", parse_mode="HTML")
+                return
+
+    if not target_user_id or amount <= 0:
         await message.reply("❌ Неверный формат. Используй: <code>п @username &lt;сумму&gt;</code> или ответь на сообщение командой <code>п &lt;сумму&gt;</code>", parse_mode="HTML")
         return
 
     if target_user_id == sender_id:
         await message.reply("❌ Нельзя переводить деньги самому себе!", parse_mode="HTML")
-        return
-
-    if amount <= 0:
-        await message.reply("❌ Сумма перевода должна быть больше нуля.", parse_mode="HTML")
         return
 
     sender_balance, _, _, _, _, _ = await get_user(sender_id, message.from_user.username)
@@ -429,13 +431,17 @@ async def cmd_microloan(message: Message):
         await send_sub_request(message)
         return
 
-    clean_text = re.sub(r'(?<=\d)\s+(?=\d)', '', message.text.strip())
-    parts = clean_text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
+    parts = message.text.strip().split()
+    if len(parts) < 2:
         await message.reply("❌ Неверный формат. Используй: <code>микрозайм &lt;сумма&gt;</code> (максимум 35 000).", parse_mode="HTML")
         return
 
-    amount = int(parts[1])
+    amount_str = "".join(parts[1:])
+    if not amount_str.isdigit():
+        await message.reply("❌ Неверный формат суммы.", parse_mode="HTML")
+        return
+
+    amount = int(amount_str)
     if amount <= 0 or amount > 35000:
         await message.reply("❌ Сумма микрозайма должна быть от 1 до <b>35 000</b> фелициевых долларов.", parse_mode="HTML")
         return
@@ -544,18 +550,18 @@ async def cmd_blackjack(message: Message):
         return
 
     text = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк")
-    text = re.sub(r'(?<=\d)\s+(?=\d)', '', text)
     parts = text.split()
     
-    if len(parts) != 2:
+    if len(parts) < 2:
         return
 
     balance, _, _, _, _, _ = await get_user(user_id, message.from_user.username)
     
-    if parts[1] == "вабанк":
+    bet_str = "".join(parts[1:])
+    if bet_str == "вабанк":
         bet = balance
-    elif parts[1].isdigit():
-        bet = int(parts[1])
+    elif bet_str.isdigit():
+        bet = int(bet_str)
     else:
         return
 
@@ -874,8 +880,6 @@ async def process_roulette_bet(message: Message):
         return
 
     text_to_parse = message.text.lower().replace("ва банк", "вабанк").replace("ва-банк", "вабанк")
-    # Очищаем все пробелы между цифрами для поддержки формата "1 000 к", "100 000 000 ч" и т.д.
-    text_to_parse = re.sub(r'(?<=\d)\s+(?=\d)', '', text_to_parse)
     text_lines = text_to_parse.strip().split("\n")
     
     user_id = message.from_user.id
@@ -895,15 +899,18 @@ async def process_roulette_bet(message: Message):
             continue
             
         parts = line_clean.split()
-        if len(parts) != 2:
+        if len(parts) < 2:
             continue
             
-        target = parts[1].lower()
+        # Последнее слово всегда воспринимаем как цель (к, ч, 1-12)
+        target = parts[-1].lower()
+        # Всё, что было до цели, склеиваем в одну строку без пробелов (для поддержки сумм с пробелами: 1 000)
+        bet_str = "".join(parts[:-1])
 
-        if parts[0] == "вабанк":
+        if bet_str == "вабанк":
             bet = available_balance
-        elif parts[0].isdigit():
-            bet = int(parts[0])
+        elif bet_str.isdigit():
+            bet = int(bet_str)
         else:
             continue
 
